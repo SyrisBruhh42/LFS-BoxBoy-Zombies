@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.SanctuaryStorytellerController
 import com.example.data.AppStoreSettingsState
 import com.example.data.BoxBoyRepository
 import com.example.data.CareerDossier
@@ -16,6 +17,7 @@ import com.example.data.DailyDirective
 import com.example.data.DailyDirectiveMetric
 import com.example.data.DriveSyncManager
 import com.example.data.DriveUploadRetentionPolicy
+import com.example.data.FriendlyGuideCardState
 import com.example.data.GoogleDriveSaveFile
 import com.example.data.GoogleDriveSyncUiState
 import com.example.data.HostedRoomDescriptor
@@ -23,11 +25,16 @@ import com.example.data.LfsHostMode
 import com.example.data.LfsLifecyclePolicy
 import com.example.data.LfsServerEndpointConfig
 import com.example.data.OasisBotPersona
+import com.example.data.OasisImagineeringTranslator
+import com.example.data.OasisWingDestination
 import com.example.data.PerkType
+import com.example.data.RmblynChatMessage
+import com.example.data.SanctuaryStorytellerState
 import com.example.data.SaveSlot
 import com.example.data.SyncTransportMode
 import com.example.data.TrashArcadeLaunchParams
 import com.example.data.TrashArcadeSharedRelic
+import com.example.data.Zt9ComfortOverridesState
 import com.example.game.ArmorRigState
 import com.example.game.ArmorSlot
 import com.example.game.BoxBoyGameEngine
@@ -206,6 +213,54 @@ class BoxBoyViewModel(
     private val _trashArcadeLaunchParams = MutableStateFlow(TrashArcadeLaunchParams())
     val trashArcadeLaunchParams: StateFlow<TrashArcadeLaunchParams> = _trashArcadeLaunchParams.asStateFlow()
 
+    private val _zt9ComfortState = MutableStateFlow(Zt9ComfortOverridesState())
+    val zt9ComfortState: StateFlow<Zt9ComfortOverridesState> = _zt9ComfortState.asStateFlow()
+
+    private val _friendlyGuideCard = MutableStateFlow(
+        OasisImagineeringTranslator.buildFriendlyGuideCard(
+            rawReason = "PERMIT: abac_32_lattice_verified",
+            isOfflineFallback = false,
+            roomCode = "LFS-8K4M2P"
+        )
+    )
+    val friendlyGuideCard: StateFlow<FriendlyGuideCardState> = _friendlyGuideCard.asStateFlow()
+
+    private val _activeOasisWing = MutableStateFlow(OasisWingDestination.BOXBOY_DEFENSE)
+    val activeOasisWing: StateFlow<OasisWingDestination> = _activeOasisWing.asStateFlow()
+
+    private val _isOasisOverlayOpen = MutableStateFlow(false)
+    val isOasisOverlayOpen: StateFlow<Boolean> = _isOasisOverlayOpen.asStateFlow()
+
+    private val _rmblynMessages = MutableStateFlow<List<RmblynChatMessage>>(
+        listOf(
+            RmblynChatMessage(
+                id = "seed_willow",
+                channelId = "arcade-lounge",
+                senderHandle = "@willow",
+                messageText = "Hearth Key verified! Ready for Tag-Team Rescue and Cardboard Critter wave defense.",
+                isCompanionBot = true
+            ),
+            RmblynChatMessage(
+                id = "seed_cinder",
+                channelId = "arcade-lounge",
+                senderHandle = "@cinder",
+                messageText = "Starlight Rupees & Wonder Relics synced across TrashArcade Hall.",
+                isCompanionBot = true
+            ),
+            RmblynChatMessage(
+                id = "seed_mote",
+                channelId = "arcade-lounge",
+                senderHandle = "@mote",
+                messageText = "Sanctuary Storyteller [cb64f9e7] is standing by in the top ribbon!",
+                isCompanionBot = true
+            )
+        )
+    )
+    val rmblynMessages: StateFlow<List<RmblynChatMessage>> = _rmblynMessages.asStateFlow()
+
+    val storytellerController = SanctuaryStorytellerController(scope = viewModelScope)
+    val storytellerState: StateFlow<SanctuaryStorytellerState> = storytellerController.state
+
     val driveSyncManager = DriveSyncManager(localPrefs = localPrefs)
     val driveSyncState: StateFlow<GoogleDriveSyncUiState> = driveSyncManager.syncState
 
@@ -231,6 +286,15 @@ class BoxBoyViewModel(
             saveLocalOfflineSlot(snapshot)
         },
         onTacticalMessageReceived = { netMsg ->
+            val incomingChat = RmblynChatMessage(
+                id = "ws_${netMsg.timestampMs}",
+                channelId = "arcade-lounge",
+                senderHandle = netMsg.senderTag,
+                messageText = netMsg.content,
+                timestampMs = netMsg.timestampMs,
+                isCompanionBot = false
+            )
+            _rmblynMessages.value = (_rmblynMessages.value + incomingChat).takeLast(32)
             _gameState.value = _gameState.value.copy(
                 statusToast = "OASIS [${netMsg.senderTag}]: ${netMsg.content}"
             )
@@ -333,10 +397,32 @@ class BoxBoyViewModel(
         loadGamepadMappingFromPrefs()
         loadStoreSettingsAndCareerFromPrefs()
         loadTrashArcadeRelicsFromPrefs()
+        loadZt9ComfortOverridesFromPrefs()
         konsoleServer.startServer()
         oasisServerClient.triggerTailscaleAnchorHandshakeAsync(
             isTailscaleInterfaceDetected = networkHealth.value.isTailscaleActive || networkHealth.value.isPrivateNetworkDetected
         )
+        storytellerController.refreshLibraryAsync(
+            config = oasisEndpointConfig.value,
+            hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
+        )
+        viewModelScope.launch {
+            oasisStatus.collect { status ->
+                val ring = status.tailscaleHandshake.trustRing.coerceIn(1, 4)
+                val curComfort = _zt9ComfortState.value
+                if (curComfort.activeTrustRing != ring) {
+                    _zt9ComfortState.value = curComfort.copy(
+                        activeTrustRing = ring,
+                        familyFriendlyArcadeMode = if (ring <= 2) true else curComfort.familyFriendlyArcadeMode
+                    )
+                }
+                _friendlyGuideCard.value = OasisImagineeringTranslator.buildFriendlyGuideCard(
+                    rawReason = status.tailscaleHandshake.abacDecision.reason,
+                    isOfflineFallback = !status.isConnected,
+                    roomCode = status.activeRoom.roomCode
+                )
+            }
+        }
     }
 
     // --- 60 FPS GAME LOOP TICK ---
@@ -1688,7 +1774,156 @@ class BoxBoyViewModel(
         _unlockedTrashArcadeRelics.value = next
         localPrefs.edit().putString("lfs_local_abac_v1_relics", next.joinToString(",")).apply()
         _gameState.value = _gameState.value.copy(
-            statusToast = "TRASHARCADE RELIC UNLOCKED [lfs-local-abac-v1]: ${relic.title}"
+            statusToast = "WONDER RELIC UNLOCKED [lfs-local-abac-v1]: ${relic.title}"
+        )
+    }
+
+    private fun loadZt9ComfortOverridesFromPrefs() {
+        val savedComfort = localPrefs.getBoolean("zt9_comfort_family_arcade_v1", true)
+        val ring = oasisStatus.value.tailscaleHandshake.trustRing.coerceIn(1, 4)
+        _zt9ComfortState.value = Zt9ComfortOverridesState(
+            familyFriendlyArcadeMode = if (ring <= 2) true else savedComfort,
+            activeTrustRing = ring
+        )
+    }
+
+    fun setFamilyFriendlyArcadeMode(enabled: Boolean) {
+        val ring = oasisStatus.value.tailscaleHandshake.trustRing.coerceIn(1, 4)
+        val effective = if (ring <= 2) true else enabled
+        _zt9ComfortState.value = _zt9ComfortState.value.copy(
+            familyFriendlyArcadeMode = effective,
+            activeTrustRing = ring
+        )
+        localPrefs.edit().putBoolean("zt9_comfort_family_arcade_v1", effective).apply()
+        _gameState.value = _gameState.value.copy(
+            statusToast = if (effective) {
+                "ZT-9 COMFORT ACTIVE: Cardboard Critters, Confetti KOs & Tag-Team Rescue"
+            } else {
+                "CLASSIC ARCADE LABELS ENABLED (Ring $ring)"
+            }
+        )
+    }
+
+    /**
+     * Dispatches and listens for `oasis:overlay-toggle` (`Shift+Tab` / `Ctrl+K`) so single-player
+     * action physics pause cleanly while chat, menus, and LFS navigation remain responsive.
+     */
+    fun toggleOasisUniversalOverlay(forceOpen: Boolean? = null) {
+        val nextOpen = forceOpen ?: !_isOasisOverlayOpen.value
+        _isOasisOverlayOpen.value = nextOpen
+        if (nextOpen) {
+            _gameState.value = _gameState.value.copy(
+                isPaused = true,
+                statusToast = "OASIS SHELL OVERLAY [Shift+Tab]: Action Paused - Party & Rmblyn Chat Active"
+            )
+        }
+        oasisServerClient.dispatchOasisOverlayToggleEvent(nextOpen)
+    }
+
+    /**
+     * Switches the active Oasis Wing / TrashArcade destination without dropping the active
+     * party room (`OASIS-XXXX`) or 16-Channel Rmblyn Family Chat.
+     */
+    fun selectOasisWing(wing: OasisWingDestination) {
+        _activeOasisWing.value = wing
+        oasisServerClient.dispatchOasisWingSwitchEvent(wing.wingId, wing.displayTitle)
+        val partyCode = OasisImagineeringTranslator.formatOasisPartyRoomCode(oasisStatus.value.activeRoom.roomCode)
+        _gameState.value = _gameState.value.copy(
+            statusToast = "WING READY [${wing.shortBadge}]: ${wing.displayTitle} (Party $partyCode Preserved)"
+        )
+    }
+
+    /**
+     * Posts a message to the 16-Channel Rmblyn Family Chat (`@willow`, `@cinder`, `@mote`)
+     * without dropping the active party room.
+     */
+    fun sendRmblynFamilyChatMessage(rawText: String, channelId: String = "arcade-lounge") {
+        val trimmed = rawText.trim()
+        if (trimmed.isBlank()) return
+        val handshake = oasisStatus.value.tailscaleHandshake
+        val playerMsg = RmblynChatMessage(
+            id = "msg_${System.currentTimeMillis()}",
+            channelId = channelId,
+            senderHandle = "@${handshake.subuserId}",
+            messageText = trimmed,
+            isCompanionBot = false
+        )
+        val companionReply = buildCompanionRmblynReply(trimmed, channelId)
+        _rmblynMessages.value = (_rmblynMessages.value + listOfNotNull(playerMsg, companionReply)).takeLast(32)
+        oasisServerClient.sendTacticalMessage("@${handshake.subuserId}", trimmed)
+        viewModelScope.launch {
+            oasisServerClient.postRmblynWaveChallengeCard(
+                challengeSummary = trimmed,
+                channelId = channelId,
+                subuserRole = handshake.persona
+            )
+        }
+    }
+
+    private fun buildCompanionRmblynReply(input: String, channelId: String): RmblynChatMessage {
+        val lower = input.lowercase()
+        val partyCode = OasisImagineeringTranslator.formatOasisPartyRoomCode(oasisStatus.value.activeRoom.roomCode)
+        return when {
+            lower.contains("@cinder") -> RmblynChatMessage(
+                id = "bot_cinder_${System.currentTimeMillis()}",
+                channelId = channelId,
+                senderHandle = "@cinder",
+                messageText = "Copy that! Holding perimeter in $partyCode on Wave ${_gameState.value.wave}. Starlight Rupees ready!",
+                isCompanionBot = true
+            )
+            lower.contains("@mote") -> RmblynChatMessage(
+                id = "bot_mote_${System.currentTimeMillis()}",
+                channelId = channelId,
+                senderHandle = "@mote",
+                messageText = "Sanctuary Storyteller [cb64f9e7] is queued and Time-Machine Memory Vaults are backed up!",
+                isCompanionBot = true
+            )
+            else -> RmblynChatMessage(
+                id = "bot_willow_${System.currentTimeMillis()}",
+                channelId = channelId,
+                senderHandle = "@willow",
+                messageText = "Tag-Team Rescue ready in $partyCode! Let's turn those Cardboard Critters into Confetti KOs!",
+                isCompanionBot = true
+            )
+        }
+    }
+
+    // --- SANCTUARY STORYTELLER (cb64f9e7) CONTROLS ---
+
+    fun toggleStorytellerPlay() {
+        storytellerController.togglePlayPause(
+            config = oasisEndpointConfig.value,
+            hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
+        )
+    }
+
+    fun cycleStorytellerChapter() {
+        storytellerController.nextChapter(
+            config = oasisEndpointConfig.value,
+            hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
+        )
+    }
+
+    fun selectStorytellerTrack(trackKey: String) {
+        storytellerController.selectTrack(
+            trackKey = trackKey,
+            config = oasisEndpointConfig.value,
+            hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
+        )
+    }
+
+    fun setStorytellerSleepTimer(minutes: Int) {
+        storytellerController.setSleepFadeTimerMinutes(minutes)
+    }
+
+    fun cycleStorytellerSleepTimer() {
+        storytellerController.cycleSleepFadeTimer()
+    }
+
+    fun refreshStorytellerLibrary() {
+        storytellerController.refreshLibraryAsync(
+            config = oasisEndpointConfig.value,
+            hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
         )
     }
 
@@ -1959,5 +2194,6 @@ class BoxBoyViewModel(
         p2pManager.stopSession()
         oasisServerClient.disconnect()
         konsoleServer.stopServer()
+        storytellerController.release()
     }
 }

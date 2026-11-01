@@ -201,6 +201,12 @@ fun GameScreen(
     val accountDeletionStatus by viewModel.accountDeletionStatus.collectAsStateWithLifecycle()
     val driveSyncState by viewModel.driveSyncState.collectAsStateWithLifecycle()
     val unlockedTrashArcadeRelics by viewModel.unlockedTrashArcadeRelics.collectAsStateWithLifecycle()
+    val storytellerState by viewModel.storytellerState.collectAsStateWithLifecycle()
+    val zt9ComfortState by viewModel.zt9ComfortState.collectAsStateWithLifecycle()
+    val friendlyGuideCard by viewModel.friendlyGuideCard.collectAsStateWithLifecycle()
+    val activeOasisWing by viewModel.activeOasisWing.collectAsStateWithLifecycle()
+    val isOasisOverlayOpen by viewModel.isOasisOverlayOpen.collectAsStateWithLifecycle()
+    val rmblynMessages by viewModel.rmblynMessages.collectAsStateWithLifecycle()
 
     var activeSheet by remember { mutableStateOf(ActiveEmulatorSheet.NONE) }
     var isWorldMapModalOpen by remember { mutableStateOf(false) }
@@ -351,11 +357,11 @@ fun GameScreen(
         hapticsEnabled = storeSettings.hapticsEnabled
     )
 
-    BackHandler(enabled = activeSheet != ActiveEmulatorSheet.NONE || isWorldMapModalOpen) {
-        if (isWorldMapModalOpen) {
-            isWorldMapModalOpen = false
-        } else {
-            activeSheet = ActiveEmulatorSheet.NONE
+    BackHandler(enabled = isOasisOverlayOpen || activeSheet != ActiveEmulatorSheet.NONE || isWorldMapModalOpen) {
+        when {
+            isOasisOverlayOpen -> viewModel.toggleOasisUniversalOverlay(forceOpen = false)
+            isWorldMapModalOpen -> isWorldMapModalOpen = false
+            else -> activeSheet = ActiveEmulatorSheet.NONE
         }
     }
 
@@ -377,8 +383,17 @@ fun GameScreen(
                 }
             }
             .onKeyEvent { event ->
-                val nativeCode = event.nativeKeyEvent.keyCode
-                if (activeSheet == ActiveEmulatorSheet.CONTROLLER_MAPPER &&
+                val nativeEvent = event.nativeKeyEvent
+                val nativeCode = nativeEvent.keyCode
+                val isOverlayShortcut = event.type == KeyEventType.KeyDown && (
+                    (nativeEvent.isShiftPressed && nativeCode == AndroidKeyEvent.KEYCODE_TAB) ||
+                        (nativeEvent.isCtrlPressed && nativeCode == AndroidKeyEvent.KEYCODE_K)
+                    )
+                if (isOverlayShortcut) {
+                    sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                    viewModel.toggleOasisUniversalOverlay()
+                    true
+                } else if (activeSheet == ActiveEmulatorSheet.CONTROLLER_MAPPER &&
                     controllerConfig.awaitingKeyBindAction != null &&
                     event.type == KeyEventType.KeyDown
                 ) {
@@ -406,6 +421,39 @@ fun GameScreen(
             val isTvCastMode = controllerConfig.displayMode == DisplayScreenMode.TV_CAST_CINEMATIC
 
             Column(modifier = Modifier.fillMaxSize()) {
+                // Uninterrupted Top Oasis Universal Shell Ribbon (stays mounted across Title, Gameplay, Modals & Wing switches)
+                OasisMultiplayerBar(
+                    oasisStatus = oasisStatus,
+                    storytellerState = storytellerState,
+                    comfortState = zt9ComfortState,
+                    activeWing = activeOasisWing,
+                    isOverlayOpen = isOasisOverlayOpen,
+                    onToggleOverlay = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.toggleOasisUniversalOverlay()
+                    },
+                    onToggleStorytellerPlay = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.toggleStorytellerPlay()
+                    },
+                    onCycleStorytellerChapter = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.cycleStorytellerChapter()
+                    },
+                    onCycleSleepTimer = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.cycleStorytellerSleepTimer()
+                    },
+                    onOpenWingSwitcher = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.toggleOasisUniversalOverlay(forceOpen = true)
+                    },
+                    onOpenFamilyRoomModal = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        activeSheet = ActiveEmulatorSheet.P2P_MULTIPLAYER_SYNC
+                    }
+                )
+
                 // Sleek Compact Top Toolbar (adapts to Landscape & Portrait, with [ROTATE] & [WASD/PAD] toggles)
                 EmulatorTopRomBar(
                     gameState = gameState,
@@ -824,6 +872,38 @@ fun GameScreen(
         }
 
         ActiveEmulatorSheet.NONE -> Unit
+    }
+
+    if (isOasisOverlayOpen) {
+        OasisUniversalOverlayDialog(
+            oasisStatus = oasisStatus,
+            storytellerState = storytellerState,
+            comfortState = zt9ComfortState,
+            friendlyGuideCard = friendlyGuideCard,
+            activeWing = activeOasisWing,
+            rmblynMessages = rmblynMessages,
+            onSelectWing = { wing ->
+                sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                viewModel.selectOasisWing(wing)
+            },
+            onToggleFamilyArcadeMode = { enabled ->
+                sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                viewModel.setFamilyFriendlyArcadeMode(enabled)
+            },
+            onSendRmblynChat = { msg -> viewModel.sendRmblynFamilyChatMessage(msg) },
+            onToggleStorytellerPlay = { viewModel.toggleStorytellerPlay() },
+            onSelectStorytellerTrack = { key -> viewModel.selectStorytellerTrack(key) },
+            onSetSleepTimerMinutes = { mins -> viewModel.setStorytellerSleepTimer(mins) },
+            onRefreshStorytellerLibrary = { viewModel.refreshStorytellerLibrary() },
+            onProbeHearthKeyHandshake = {
+                viewModel.probeTailscaleHandshakeNow()
+                activeSheet = ActiveEmulatorSheet.P2P_MULTIPLAYER_SYNC
+                viewModel.toggleOasisUniversalOverlay(forceOpen = false)
+            },
+            onDismiss = {
+                viewModel.toggleOasisUniversalOverlay(forceOpen = false)
+            }
+        )
     }
 
     if (isWorldMapModalOpen) {

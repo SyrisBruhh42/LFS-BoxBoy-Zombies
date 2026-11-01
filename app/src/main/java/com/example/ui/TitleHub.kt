@@ -373,14 +373,14 @@ fun TitleHub(
                                 )
                                 Column {
                                     Text(
-                                        text = "GOOGLE DRIVE CLOUD CHRONICLES",
+                                        text = "TIME-MACHINE MEMORY VAULTS & GOOGLE DRIVE",
                                         fontFamily = CinzelDisplayFamily,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
                                         color = ChampagneGold
                                     )
                                     Text(
-                                        text = driveSyncState.statusMessage,
+                                        text = "${driveSyncState.statusMessage} | Family Arcade: Cardboard Critters, Confetti KOs & Tag-Team Rescue",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = TextCrisp
                                     )

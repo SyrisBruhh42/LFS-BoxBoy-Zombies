@@ -77,7 +77,9 @@ import com.example.data.GoogleDriveSyncUiState
 import com.example.data.LfsHostMode
 import com.example.data.LfsLifecyclePolicy
 import com.example.data.LfsServerEndpointConfig
+import com.example.data.FriendlyGuideCardState
 import com.example.data.OasisBotPersona
+import com.example.data.OasisImagineeringTranslator
 import com.example.data.SaveSlot
 import com.example.data.SyncTransportMode
 import com.example.data.TrashArcadeSharedRelic
@@ -269,8 +271,8 @@ fun SaveSlotsDialog(
     var slotTitle by remember { mutableStateOf("Chronicle - Wave ${gameState.wave} (${gameState.currentWeapon.shortCode})") }
 
     EmulatorModalContainer(
-        title = "ASTRAL CHRONICLES | GOOGLE DRIVE & CLOUD SAVE",
-        subtitle = "Sync SHA-256 verified JSON save envelopes to ${DriveSyncManager.TARGET_FOLDER_PATH}",
+        title = "TIME-MACHINE MEMORY VAULTS | GOOGLE DRIVE & CLOUD SAVE",
+        subtitle = "${OasisImagineeringTranslator.AEGIS_SAVE_VAULTS_LABEL} (aegisEnvelopeV1) | Sync SHA-256 verified JSON save envelopes to ${DriveSyncManager.TARGET_FOLDER_PATH}",
         onDismiss = onDismiss
     ) {
         Row(
@@ -1175,6 +1177,13 @@ fun P2pMultiplayerSyncDialog(
         val satchelTier = remember(currentPoints) {
             OasisHostedServerClient.computeSatchelTier(currentPoints)
         }
+        val guideCard = remember(ssoState.abacDecision.reason, oasisStatus.isConnected, oasisStatus.roomCode) {
+            OasisImagineeringTranslator.buildFriendlyGuideCard(
+                rawReason = ssoState.abacDecision.reason,
+                isOfflineFallback = !oasisStatus.isConnected,
+                roomCode = oasisStatus.roomCode
+            )
+        }
         Card(
             colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
             modifier = Modifier
@@ -1193,21 +1202,26 @@ fun P2pMultiplayerSyncDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "TRASHARCADE SATCHEL & TAILSCALE 4-PILLAR STATUS",
+                            text = "${OasisImagineeringTranslator.HEARTH_KEY_LABEL} & ${OasisImagineeringTranslator.STARLIGHT_RUPEES_LABEL}",
                             style = MaterialTheme.typography.titleMedium,
                             color = MysteryGold
                         )
                         Text(
-                            text = "ReplicaID: ${ssoState.stableNodeId} | Subuser: ${ssoState.subuserId} (${ssoState.persona}) | Ring ${ssoState.trustRing} | Epoch #${ssoState.generationEpoch}",
+                            text = "Hearth Key (Node.StableID): ${ssoState.stableNodeId} | Subuser: ${ssoState.subuserId} (${ssoState.persona}) | Ring ${ssoState.trustRing} | Epoch #${ssoState.generationEpoch}",
                             style = MaterialTheme.typography.labelSmall,
                             color = CryoCyan
+                        )
+                        Text(
+                            text = "${OasisImagineeringTranslator.STARLIGHT_QUIET_HOURS_LABEL} | ${OasisImagineeringTranslator.FAMILY_ARCADE_SUBTITLE}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PhosphorGreen
                         )
                     }
                     OutlinedButton(
                         onClick = onProbeTailscaleHandshake,
                         modifier = Modifier.testTag("probe_tailscale_sso_button")
                     ) {
-                        Text("PROBE ANCHOR SSO")
+                        Text("CHECK HEARTH KEY")
                     }
                 }
 
@@ -1240,7 +1254,7 @@ fun P2pMultiplayerSyncDialog(
 
                 HorizontalDivider(color = CryoCyan.copy(alpha = 0.25f))
 
-                // CMY Rupee Satchel Breakdown & Tier
+                // Starlight Rupees & Wonder Relics Satchel Breakdown & Tier
                 val rupeeSummary = if (rupeeBreakdown.isEmpty()) {
                     "0 RUP"
                 } else {
@@ -1248,14 +1262,14 @@ fun P2pMultiplayerSyncDialog(
                 }
                 val totalSprites = rupeeBreakdown.sumOf { it.second }
                 Text(
-                    text = "CMY RUPEE SATCHEL [$satchelTier]: $currentPoints RUP -> $rupeeSummary ($totalSprites/24 static sprites)",
+                    text = "STARLIGHT RUPEES SATCHEL [$satchelTier]: $currentPoints RUP -> $rupeeSummary ($totalSprites/24 static sprites)",
                     style = MaterialTheme.typography.labelSmall,
                     color = PhosphorGreen
                 )
 
-                // 4 Cross-Game lfs-local-abac-v1 Relics
+                // 4 Cross-Game lfs-local-abac-v1 Wonder Relics
                 Text(
-                    text = "CROSS-GAME RELICS (lfs-local-abac-v1):",
+                    text = "WONDER RELICS (lfs-local-abac-v1):",
                     style = MaterialTheme.typography.labelSmall,
                     color = MysteryGold
                 )
@@ -1270,6 +1284,14 @@ fun P2pMultiplayerSyncDialog(
                         )
                     }
                 }
+
+                HorizontalDivider(color = CryoCyan.copy(alpha = 0.25f))
+
+                // Friendly Guide Card (Grade <= 8.0 4-Step ZT-6 Replacement)
+                FriendlyGuideCard(
+                    guideState = guideCard,
+                    onNextStepClicked = onProbeTailscaleHandshake
+                )
             }
         }
 

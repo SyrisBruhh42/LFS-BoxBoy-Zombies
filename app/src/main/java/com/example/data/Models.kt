@@ -185,13 +185,13 @@ enum class SyncTransportMode(val label: String, val subtitle: String) {
 enum class LfsHostMode(val wireId: String, val label: String, val subtitle: String) {
     LAUNCH_U2_HOSTING_SERVICE(
         "LAUNCH_U2_HOSTING_SERVICE",
-        "Launch on U2 Hosting Service",
-        "Dedicated 24/7 cloud room on play.lewisfamilysystems.com"
+        "Open a Family Cloud Room",
+        "Always-on family room hosted in the Oasis Sanctuary cloud (play.lewisfamilysystems.com)"
     ),
     HOST_LOCAL_DEVICE(
         "HOST_LOCAL_DEVICE",
-        "Host on Local Device",
-        "Authoritative on-device host bridged via sync.lewisfamilysystems.com"
+        "Host From My Desk",
+        "Your device leads the game and bridges family rooms instantly"
     );
 
     val title: String get() = label
@@ -427,6 +427,280 @@ enum class TrashArcadeSharedRelic(
     val relicId: String get() = assetId
     val crossGamePerk: String get() = unlockConditionDescription
 }
+
+// --- DISNEY IMAGINEERING ENGAGEMENT TRANSLATOR (GRADE <= 8.0) & ZT-9 COMFORT OVERRIDES ---
+
+data class Zt9ComfortOverridesState(
+    val familyFriendlyArcadeMode: Boolean = true,
+    val autoEnforceForChildRings: Boolean = true,
+    val activeTrustRing: Int = 3
+) {
+    val isEffectiveFamilyArcade: Boolean
+        get() = if (autoEnforceForChildRings && activeTrustRing <= 2) true else familyFriendlyArcadeMode
+
+    val isComfortEnforced: Boolean
+        get() = isEffectiveFamilyArcade
+
+    val modeBadgeLabel: String
+        get() = if (isEffectiveFamilyArcade) {
+            "FAMILY ARCADE MODE (Cardboard Critters & Confetti KOs)"
+        } else {
+            "CLASSIC TACTICAL MODE"
+        }
+}
+
+data class FriendlyGuideCardState(
+    val id: String = "guide_ready",
+    val title: String = "Friendly Guide Card",
+    val whatHappened: String = "Your Hearth Key (Instant Family Pass) is active and ready.",
+    val whyItHappened: String = "Oasis automatically links your family room and backs up your adventure.",
+    val yourProgressIsSafe: String = "Every Starlight Rupee, Wonder Relic, and wave milestone is safely tucked into your Time-Machine Memory Vaults.",
+    val oneClickNextStepLabel: String = "Check Family Room Status",
+    val isWarning: Boolean = false
+) {
+    val nextStepButtonLabel: String
+        get() = oneClickNextStepLabel
+}
+
+enum class OasisWingDestination(
+    val wingId: String,
+    val displayName: String,
+    val shortBadge: String,
+    val description: String,
+    val deepLinkUri: String
+) {
+    TRASH_ARCADE_HALL(
+        wingId = "lfs-trash-arcade",
+        displayName = "Return to TrashArcade Hall",
+        shortBadge = "TrashArcade Hall",
+        description = "Main family arcade foyer, Starlight Rupee prize counter, and Wonder Relic showcase.",
+        deepLinkUri = "oasis://hub/wing/lfs-trash-arcade"
+    ),
+    COMMONPLACE_WING_I(
+        wingId = "commonplace-wing-1",
+        displayName = "Commonplace Wing I",
+        shortBadge = "Wing I: Commonplace",
+        description = "Shared family commonplace book, keepsake clippings, and daily discovery notes.",
+        deepLinkUri = "oasis://hub/wing/commonplace-wing-1"
+    ),
+    SCRIPTORIUM_WING_II(
+        wingId = "scriptorium-wing-2",
+        displayName = "Scriptorium Wing II",
+        shortBadge = "Wing II: Scriptorium",
+        description = "Quiet writing studio, story drafting desk, and illustrated family chronicles.",
+        deepLinkUri = "oasis://hub/wing/scriptorium-wing-2"
+    ),
+    CHAPTERHOUSE_WING_III(
+        wingId = "chapterhouse-wing-3",
+        displayName = "Chapterhouse Wing III",
+        shortBadge = "Wing III: Chapterhouse",
+        description = "Cozy reading room and AudioBookshelf Sanctuary Storyteller library.",
+        deepLinkUri = "oasis://hub/wing/chapterhouse-wing-3"
+    ),
+    VIGIL_3D_WING_IV(
+        wingId = "vigil-3d-wing-4",
+        displayName = "3D Vigil Wing IV",
+        shortBadge = "Wing IV: 3D Vigil",
+        description = "Interactive 3D starlight watchtower, constellation map, and home status globe.",
+        deepLinkUri = "oasis://hub/wing/vigil-3d-wing-4"
+    ),
+    CODE_RUNNER(
+        wingId = "lfs-code-runner",
+        displayName = "Code Runner",
+        shortBadge = "Code Runner",
+        description = "Fast-paced logic puzzles and co-op coding obstacle courses.",
+        deepLinkUri = "oasis://hub/capsule/lfs-code-runner"
+    ),
+    BOXHEAD_FORT(
+        wingId = "lfs-boxhead-fort",
+        displayName = "Boxhead Fort",
+        shortBadge = "Boxhead Fort",
+        description = "Co-op cardboard fort builder and Neon Arcade Bot defense.",
+        deepLinkUri = "oasis://hub/capsule/lfs-boxhead-fort"
+    ),
+    BOXBOY_DEFENSE(
+        wingId = "lfs-boxboy-zombies",
+        displayName = "BoxBoy Defense",
+        shortBadge = "BoxBoy Defense",
+        description = "Active Starlight Citadel defense with Cardboard Critters and Tag-Team Rescue.",
+        deepLinkUri = "oasis://hub/capsule/lfs-boxboy-zombies"
+    );
+
+    val displayTitle: String get() = displayName
+}
+
+data class RmblynChatMessage(
+    val id: String,
+    val channelId: String = "arcade-lounge",
+    val senderHandle: String,
+    val messageText: String,
+    val timestampMs: Long = System.currentTimeMillis(),
+    val isCompanionBot: Boolean = false
+)
+
+data class OpenAudibleChapterTrack(
+    val key: String = "cb64f9e7",
+    val bookTitle: String = "Chronicles of the Starlight Citadel",
+    val chapterTitle: String = "Chapter 1: The Hearth Key & The Clockwork Lantern",
+    val author: String = "LFS Sanctuary Storyteller",
+    val durationSec: Int = 900,
+    val streamPath: String = "/api/lfs/openaudible/stream/cb64f9e7"
+)
+
+data class SanctuaryStorytellerState(
+    val isPlaying: Boolean = false,
+    val activeTrackKey: String = "cb64f9e7",
+    val bookTitle: String = "Chronicles of the Starlight Citadel",
+    val chapterTitle: String = "Ch. 1: The Hearth Key & Clockwork Lantern",
+    val availableTracks: List<OpenAudibleChapterTrack> = listOf(
+        OpenAudibleChapterTrack(
+            key = "cb64f9e7",
+            bookTitle = "Chronicles of the Starlight Citadel",
+            chapterTitle = "Ch. 1: The Hearth Key & Clockwork Lantern",
+            streamPath = "/api/lfs/openaudible/stream/cb64f9e7"
+        ),
+        OpenAudibleChapterTrack(
+            key = "cb64f9e7-ch2",
+            bookTitle = "Chronicles of the Starlight Citadel",
+            chapterTitle = "Ch. 2: Willow's Emerald Visor",
+            streamPath = "/api/lfs/openaudible/stream/cb64f9e7"
+        ),
+        OpenAudibleChapterTrack(
+            key = "cb64f9e7-ch3",
+            bookTitle = "Chronicles of the Starlight Citadel",
+            chapterTitle = "Ch. 3: Starlight Quiet Hours",
+            streamPath = "/api/lfs/openaudible/stream/cb64f9e7"
+        )
+    ),
+    val sleepTimerMinutes: Int = 0, // 0 = Off, or 15, 30, 45
+    val sleepRemainingSeconds: Int = 0,
+    val sleepFadeVolumeMultiplier: Float = 1.0f,
+    val sourceModeLabel: String = "Sanctuary Stream Ready (cb64f9e7)",
+    val isUsingOfflineLullabyFallback: Boolean = false
+)
+
+object OasisImagineeringTranslator {
+    const val HEARTH_KEY_LABEL = "Hearth Key (Instant Family Pass)"
+    const val TIME_MACHINE_VAULTS_LABEL = "Time-Machine Memory Vaults"
+    const val AEGIS_SAVE_VAULTS_LABEL = TIME_MACHINE_VAULTS_LABEL
+    const val HOST_FROM_MY_DESK_LABEL = "Host From My Desk"
+    const val OPEN_FAMILY_CLOUD_ROOM_LABEL = "Open a Family Cloud Room"
+    const val FRIENDLY_GUIDE_CARD_LABEL = "Friendly Guide Cards"
+    const val STARLIGHT_QUIET_HOURS_LABEL = "Starlight Quiet Hours (Rest & Recharge Time)"
+    const val STARLIGHT_RUPEES_AND_RELICS_LABEL = "Starlight Rupees & Wonder Relics"
+    const val STARLIGHT_RUPEES_LABEL = STARLIGHT_RUPEES_AND_RELICS_LABEL
+    const val FAMILY_ARCADE_SUBTITLE = "Family Arcade: Cardboard Critters, Neon Arcade Bots, Confetti KOs & Tag-Team Rescue"
+
+    fun translateTerm(technicalTerm: String): String {
+        val key = technicalTerm.trim()
+        return when {
+            key.contains("Node.StableID", ignoreCase = true) ||
+                key.contains("Tailscale Auto-SSO", ignoreCase = true) ||
+                key.contains("Tailscale SSO", ignoreCase = true) -> HEARTH_KEY_LABEL
+            key.contains("aegisEnvelopeV1", ignoreCase = true) ||
+                key.contains("AES-256-GCM", ignoreCase = true) -> TIME_MACHINE_VAULTS_LABEL
+            key.equals("HOST_LOCAL_PC", ignoreCase = true) ||
+                key.equals("HOST_LOCAL_DEVICE", ignoreCase = true) -> HOST_FROM_MY_DESK_LABEL
+            key.equals("LAUNCH_U2_HOSTING_SERVICE", ignoreCase = true) -> OPEN_FAMILY_CLOUD_ROOM_LABEL
+            key.contains("ZT-6", ignoreCase = true) -> FRIENDLY_GUIDE_CARD_LABEL
+            key.contains("Z_1440", ignoreCase = true) ||
+                key.contains("Curfew", ignoreCase = true) -> STARLIGHT_QUIET_HOURS_LABEL
+            key.contains("CMY Rupee", ignoreCase = true) ||
+                key.contains("lfs-local-abac-v1", ignoreCase = true) -> STARLIGHT_RUPEES_AND_RELICS_LABEL
+            else -> technicalTerm
+        }
+    }
+
+    fun enemyLabel(familyArcadeMode: Boolean): String =
+        if (familyArcadeMode) "Cardboard Critters & Neon Arcade Bots" else "Hostile Zombies"
+
+    fun enemyShortLabel(familyArcadeMode: Boolean): String =
+        if (familyArcadeMode) "Critters" else "Zombies"
+
+    fun koLabel(familyArcadeMode: Boolean): String =
+        if (familyArcadeMode) "Confetti KOs" else "Total Kills"
+
+    fun reviveLabel(familyArcadeMode: Boolean): String =
+        if (familyArcadeMode) "Tag-Team Rescue" else "Squad Revive"
+
+    fun eliminationVerb(comfort: Zt9ComfortOverridesState): String =
+        koLabel(comfort.isEffectiveFamilyArcade)
+
+    fun reviveVerb(comfort: Zt9ComfortOverridesState): String =
+        reviveLabel(comfort.isEffectiveFamilyArcade)
+
+    fun translateEnemyName(rawName: String, comfort: Zt9ComfortOverridesState): String {
+        if (!comfort.isEffectiveFamilyArcade) return rawName
+        val lower = rawName.lowercase()
+        return when {
+            lower.contains("devil") || lower.contains("boss") || lower.contains("bot") -> "Neon Arcade Bots"
+            else -> "Cardboard Critters"
+        }
+    }
+
+    fun formatPartyRoomBadge(roomCode: String): String {
+        val suffix = roomCode.removePrefix("LFS-").removePrefix("OASIS-").take(6).ifBlank { "8K4M2P" }
+        return "OASIS-$suffix"
+    }
+
+    fun formatOasisPartyRoomCode(roomCode: String): String = formatPartyRoomBadge(roomCode)
+
+    fun buildFriendlyGuideCard(
+        whatHappened: String,
+        whyItHappened: String,
+        yourProgressIsSafe: String = "Your Starlight Rupees, Wonder Relics, and wave progress are safely stored in your Time-Machine Memory Vaults.",
+        oneClickNextStepLabel: String = "Reconnect Family Room",
+        isWarning: Boolean = false
+    ): FriendlyGuideCardState {
+        return FriendlyGuideCardState(
+            title = FRIENDLY_GUIDE_CARD_LABEL,
+            whatHappened = whatHappened,
+            whyItHappened = whyItHappened,
+            yourProgressIsSafe = yourProgressIsSafe,
+            oneClickNextStepLabel = oneClickNextStepLabel,
+            isWarning = isWarning
+        )
+    }
+
+    fun buildFriendlyGuideCard(
+        rawReason: String,
+        isOfflineFallback: Boolean = false,
+        roomCode: String = "LFS-8K4M2P"
+    ): FriendlyGuideCardState {
+        val partyCode = formatPartyRoomBadge(roomCode)
+        val lower = rawReason.lowercase()
+        return when {
+            lower.contains("curfew") -> FriendlyGuideCardState(
+                id = "guide_curfew",
+                title = FRIENDLY_GUIDE_CARD_LABEL,
+                whatHappened = "It is currently $STARLIGHT_QUIET_HOURS_LABEL in $partyCode.",
+                whyItHappened = "Oasis pauses late-night cloud arcade sessions so everyone can rest and recharge.",
+                yourProgressIsSafe = "All of your Starlight Rupees, Wonder Relics, and wave progress are safely tucked into your $TIME_MACHINE_VAULTS_LABEL.",
+                oneClickNextStepLabel = "Play Cozy Offline Story Mode",
+                isWarning = true
+            )
+            lower.contains("deny") || isOfflineFallback -> FriendlyGuideCardState(
+                id = "guide_offline",
+                title = FRIENDLY_GUIDE_CARD_LABEL,
+                whatHappened = "Playing in Cozy Desk Mode for room $partyCode while the Family Cloud Room is resting.",
+                whyItHappened = "Your $HEARTH_KEY_LABEL is keeping your local session running smoothly without waiting on the cloud.",
+                yourProgressIsSafe = "Every Starlight Rupee, Wonder Relic, and wave milestone is saved in your $TIME_MACHINE_VAULTS_LABEL.",
+                oneClickNextStepLabel = "Check Family Room Connection",
+                isWarning = false
+            )
+            else -> FriendlyGuideCardState(
+                id = "guide_ready",
+                title = FRIENDLY_GUIDE_CARD_LABEL,
+                whatHappened = "Your $HEARTH_KEY_LABEL is active and connected to $partyCode.",
+                whyItHappened = "Oasis automatically links your family room and backs up your adventure.",
+                yourProgressIsSafe = "Every Starlight Rupee, Wonder Relic, and wave milestone is safely tucked into your $TIME_MACHINE_VAULTS_LABEL.",
+                oneClickNextStepLabel = "Open Family Cloud Room",
+                isWarning = false
+            )
+        }
+    }
+}
+
 
 
 

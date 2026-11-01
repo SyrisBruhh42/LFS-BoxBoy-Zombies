@@ -480,6 +480,110 @@ class ExampleUnitTest {
         val badMagicJson = sealedEnvelope.toString().replace("AEGISENV", "CORRUPT_HEADER")
         assertTrue(com.example.data.CryptoSyncEngine.unsealSixGateAegisEnvelopeV1(badMagicJson, "AEGIS-CP12-TEST-KEY").isFailure)
     }
+
+    @Test
+    fun phase11_disneyImagineeringTranslatorOverlayAndSanctuaryStoryteller_worksCorrectly() {
+        // 1. Verify Disney Imagineering Engagement Translator vocabulary (Grade <= 8.0) while preserving wire IDs
+        assertEquals(
+            "Hearth Key (Instant Family Pass)",
+            com.example.data.OasisImagineeringTranslator.HEARTH_KEY_LABEL
+        )
+        assertEquals(
+            "Time-Machine Memory Vaults",
+            com.example.data.OasisImagineeringTranslator.AEGIS_SAVE_VAULTS_LABEL
+        )
+        assertEquals(
+            "Host From My Desk",
+            com.example.data.LfsHostMode.HOST_LOCAL_DEVICE.label
+        )
+        assertEquals(
+            "HOST_LOCAL_DEVICE",
+            com.example.data.LfsHostMode.HOST_LOCAL_DEVICE.wireId
+        )
+        assertEquals(
+            "Open a Family Cloud Room",
+            com.example.data.LfsHostMode.LAUNCH_U2_HOSTING_SERVICE.label
+        )
+        assertEquals(
+            "LAUNCH_U2_HOSTING_SERVICE",
+            com.example.data.LfsHostMode.LAUNCH_U2_HOSTING_SERVICE.wireId
+        )
+        assertEquals(
+            "Starlight Quiet Hours (Rest & Recharge Time)",
+            com.example.data.OasisImagineeringTranslator.STARLIGHT_QUIET_HOURS_LABEL
+        )
+        assertEquals(
+            "Starlight Rupees & Wonder Relics",
+            com.example.data.OasisImagineeringTranslator.STARLIGHT_RUPEES_LABEL
+        )
+        assertEquals(
+            "OASIS-8K4M2P",
+            com.example.data.OasisImagineeringTranslator.formatOasisPartyRoomCode("LFS-8K4M2P")
+        )
+
+        // 2. Verify zt9_comfort_overrides Family-Friendly Arcade Mode (Ring 1..4)
+        val childComfort = com.example.data.Zt9ComfortOverridesState(
+            familyFriendlyArcadeMode = false,
+            activeTrustRing = 1
+        )
+        assertTrue("Ring 1/2 must always enforce Family-Friendly Arcade Mode", childComfort.isComfortEnforced)
+        assertEquals(
+            "Confetti KOs",
+            com.example.data.OasisImagineeringTranslator.eliminationVerb(childComfort)
+        )
+        assertEquals(
+            "Tag-Team Rescue",
+            com.example.data.OasisImagineeringTranslator.reviveVerb(childComfort)
+        )
+        assertEquals(
+            "Cardboard Critters",
+            com.example.data.OasisImagineeringTranslator.translateEnemyName("Box Shambler", childComfort)
+        )
+        assertEquals(
+            "Neon Arcade Bots",
+            com.example.data.OasisImagineeringTranslator.translateEnemyName("Boxhead Red Devil", childComfort)
+        )
+
+        // 3. Verify 4-Step Friendly Guide Card (ZT-6 Error Banner replacement)
+        val curfewCard = com.example.data.OasisImagineeringTranslator.buildFriendlyGuideCard(
+            rawReason = "FIRST_APPLICABLE_DENY: curfew_window_active",
+            isOfflineFallback = false,
+            roomCode = "LFS-8K4M2P"
+        )
+        assertTrue(curfewCard.whatHappened.contains("Starlight Quiet Hours"))
+        assertTrue(curfewCard.yourProgressIsSafe.contains("Time-Machine Memory Vaults"))
+        assertTrue(curfewCard.nextStepButtonLabel.isNotBlank())
+
+        // 4. Verify Oasis Wing Selector destinations & Sanctuary Storyteller (cb64f9e7)
+        assertEquals(8, com.example.data.OasisWingDestination.entries.size)
+        val streamUrl = com.example.audio.SanctuaryStorytellerController.buildStreamUrl(
+            baseUrl = "https://lfs-prod.tail420c4d.ts.net",
+            trackKey = "cb64f9e7"
+        )
+        assertEquals("https://lfs-prod.tail420c4d.ts.net/api/lfs/openaudible/stream/cb64f9e7", streamUrl)
+        val libraryUrl = com.example.audio.SanctuaryStorytellerController.buildLibraryUrl(
+            baseUrl = "https://lfs-prod.tail420c4d.ts.net"
+        )
+        assertEquals("https://lfs-prod.tail420c4d.ts.net/api/lfs/openaudible/library", libraryUrl)
+
+        // Verify Starlight Sleep-Fade timer volume curve & procedural music-box PCM synthesis
+        assertEquals(
+            1.0f,
+            com.example.audio.SanctuaryStorytellerController.computeSleepFadeVolumeMultiplier(0, 900),
+            0.001f
+        )
+        assertEquals(
+            0.5f,
+            com.example.audio.SanctuaryStorytellerController.computeSleepFadeVolumeMultiplier(15, 450),
+            0.01f
+        )
+        val pcmSamples = com.example.audio.SanctuaryStorytellerController.synthesizeMusicBoxLullabyPcm(
+            sampleRateHz = 16000,
+            durationSec = 1
+        )
+        assertEquals(16000, pcmSamples.size)
+        assertTrue(pcmSamples.any { it != 0.toShort() })
+    }
 }
 
 

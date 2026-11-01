@@ -975,6 +975,49 @@ class OasisHostedServerClient(
         return sent
     }
 
+    /**
+     * Dispatches `oasis:overlay-toggle` (`Shift+Tab` / `Ctrl+K`) across the active WebSocket
+     * without dropping the party room or 16-Channel Rmblyn Family Chat.
+     */
+    fun dispatchOasisOverlayToggleEvent(isOpen: Boolean): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!_telemetry.value.isConnectedToLfsEdge) return false
+        val json = AegisJsonObject().apply {
+            put("type", "oasis:overlay-toggle")
+            put("event", "oasis:overlay-toggle")
+            put("room", _telemetry.value.activeRoom.roomCode)
+            put("isOpen", isOpen)
+            put("ts", System.currentTimeMillis())
+        }.toString()
+        val sent = ws.send(json)
+        if (sent) {
+            _telemetry.value = _telemetry.value.copy(wsFramesSent = _telemetry.value.wsFramesSent + 1)
+        }
+        return sent
+    }
+
+    /**
+     * Dispatches `oasis:wing-switch` across the active WebSocket while preserving the active
+     * party room (`OASIS-XXXX`) and 16-Channel Rmblyn Family Chat.
+     */
+    fun dispatchOasisWingSwitchEvent(wingId: String, wingLabel: String): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!_telemetry.value.isConnectedToLfsEdge) return false
+        val json = AegisJsonObject().apply {
+            put("type", "oasis:wing-switch")
+            put("event", "oasis:wing-switch")
+            put("room", _telemetry.value.activeRoom.roomCode)
+            put("wingId", wingId)
+            put("wingLabel", wingLabel)
+            put("ts", System.currentTimeMillis())
+        }.toString()
+        val sent = ws.send(json)
+        if (sent) {
+            _telemetry.value = _telemetry.value.copy(wsFramesSent = _telemetry.value.wsFramesSent + 1)
+        }
+        return sent
+    }
+
     fun handleIncomingWireFrame(rawJson: String, passphrase: String = currentPassphrase) {
         try {
             val obj = JSONObject(rawJson)
@@ -992,7 +1035,7 @@ class OasisHostedServerClient(
                     val sync = deserializeHostWorldSyncFrame(obj)
                     onHostWorldSyncReceived(sync)
                 }
-                "TACTICAL_MSG" -> {
+                "TACTICAL_MSG", "RMBLYN_CHAT" -> {
                     val msg = P2pNetworkMessage(
                         packetType = "TACTICAL_MSG",
                         senderTag = obj.optString("sender", "Oasis-Peer"),
@@ -1003,6 +1046,22 @@ class OasisHostedServerClient(
                     if (msg.content.isNotBlank()) {
                         onTacticalMessageReceived(msg)
                     }
+                }
+                "oasis:overlay-toggle" -> {
+                    val remoteOpen = obj.optBoolean("isOpen", false)
+                    _telemetry.value = _telemetry.value.copy(
+                        statusBanner = if (remoteOpen) {
+                            "Oasis Universal Overlay opened by squad peer (Room [${_telemetry.value.activeRoom.roomCode}] active)"
+                        } else {
+                            "Oasis Universal Overlay closed by squad peer (Room [${_telemetry.value.activeRoom.roomCode}] active)"
+                        }
+                    )
+                }
+                "oasis:wing-switch" -> {
+                    val wingLabel = obj.optString("wingLabel", "TrashArcade Hall")
+                    _telemetry.value = _telemetry.value.copy(
+                        statusBanner = "Party Room [${_telemetry.value.activeRoom.roomCode}] synced to $wingLabel"
+                    )
                 }
                 "SYNC_SAVE" -> {
                     val capsule = obj.optString("capsule", "")
