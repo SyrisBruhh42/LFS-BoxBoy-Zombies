@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
@@ -67,6 +68,16 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.ControllerProfile
 import com.example.data.CryptoSyncEngine
 import com.example.data.DEFAULT_WEAPONS
+import com.example.data.DriveConflictStatus
+import com.example.data.DriveEnvelopeFileKind
+import com.example.data.DriveSyncManager
+import com.example.data.DriveUploadRetentionPolicy
+import com.example.data.GoogleDriveSaveFile
+import com.example.data.GoogleDriveSyncUiState
+import com.example.data.LfsHostMode
+import com.example.data.LfsLifecyclePolicy
+import com.example.data.LfsServerEndpointConfig
+import com.example.data.OasisBotPersona
 import com.example.data.SaveSlot
 import com.example.data.SyncTransportMode
 import com.example.game.GameSessionState
@@ -76,12 +87,21 @@ import com.example.input.ControllerManager
 import com.example.input.GamepadAction
 import com.example.input.GamepadMapping
 import com.example.input.TouchButtonId
+import com.example.network.CoopPeerState
 import com.example.network.HeadlessKonsoleServer
 import com.example.network.KONSOLE_TCP_PORT
+import com.example.network.NetworkHealthSnapshot
+import com.example.network.OasisHostedServerClient
+import com.example.network.OasisSessionStatus
 import com.example.network.P2pSessionStatus
 import com.example.ui.theme.CryoCyan
 import com.example.ui.theme.HandheldChassis
 import com.example.ui.theme.HandheldObsidian
+import com.example.ui.theme.HighContrastBlack
+import com.example.ui.theme.HighContrastCyan
+import com.example.ui.theme.HighContrastWhite
+import com.example.ui.theme.HighContrastYellow
+import com.example.ui.theme.LocalAccessibilityTheme
 import com.example.ui.theme.MysteryGold
 import com.example.ui.theme.PackPurple
 import com.example.ui.theme.PhosphorGreen
@@ -96,6 +116,10 @@ import com.example.viewmodel.UiState
 
 enum class ActiveEmulatorSheet {
     NONE,
+    TITLE_HUB,
+    CAREER_DOSSIER,
+    FIELD_MANUAL,
+    STORE_SETTINGS_PRIVACY,
     SAVE_SLOTS,
     CONTROLLER_MAPPER,
     SPEED_CONTROLLER,
@@ -220,24 +244,32 @@ fun SpeedControllerDialog(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SaveSlotsDialog(
     gameState: GameSessionState,
     isCloudAuthenticated: Boolean,
     offlineSlots: List<CryptoSyncEngine.GameSaveSnapshot>,
     cloudState: UiState<List<SaveSlot>>,
+    driveSyncState: GoogleDriveSyncUiState = GoogleDriveSyncUiState(),
     onSaveNewSlot: (String) -> Unit,
+    onSyncToGoogleDrive: (String) -> Unit = onSaveNewSlot,
+    onRefreshGoogleDrive: () -> Unit = {},
+    onReconcileGoogleDrive: () -> Unit = onRefreshGoogleDrive,
+    onSelectDriveRetentionPolicy: (DriveUploadRetentionPolicy) -> Unit = {},
+    onLoadGoogleDriveSlot: (GoogleDriveSaveFile) -> Unit = {},
+    onDeleteGoogleDriveSlot: (String) -> Unit = {},
     onLoadOfflineSlot: (CryptoSyncEngine.GameSaveSnapshot) -> Unit,
     onLoadCloudSlot: (SaveSlot) -> Unit,
     onDeleteCloudSlot: (String) -> Unit,
     onRequestGoogleSignIn: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var slotTitle by remember { mutableStateOf("Slot - Wave ${gameState.wave} (${gameState.currentWeapon.shortCode})") }
+    var slotTitle by remember { mutableStateOf("Chronicle - Wave ${gameState.wave} (${gameState.currentWeapon.shortCode})") }
 
     EmulatorModalContainer(
-        title = "MYBOY! SAVE STATES (OFFLINE + CLOUD)",
-        subtitle = "100% Offline AES-256-GCM slots + optional Firestore multi-device backup",
+        title = "ASTRAL CHRONICLES • GOOGLE DRIVE & CLOUD SAVE",
+        subtitle = "Sync SHA-256 verified JSON save envelopes to ${DriveSyncManager.TARGET_FOLDER_PATH}",
         onDismiss = onDismiss
     ) {
         Row(
@@ -248,7 +280,7 @@ fun SaveSlotsDialog(
             OutlinedTextField(
                 value = slotTitle,
                 onValueChange = { slotTitle = it },
-                label = { Text("Save Slot Label") },
+                label = { Text("Chronicle Slot Title") },
                 singleLine = true,
                 modifier = Modifier
                     .weight(1f)
@@ -259,14 +291,167 @@ fun SaveSlotsDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = PhosphorGreen, contentColor = HandheldObsidian),
                 modifier = Modifier.testTag("save_state_confirm_button")
             ) {
-                Icon(Icons.Default.Save, contentDescription = "Save State")
+                Icon(Icons.Default.Save, contentDescription = "Save Chronicle")
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("SAVE")
+                Text("SAVE ALL", fontWeight = FontWeight.Bold)
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        Text("LOCAL 100% OFFLINE AES-GCM SLOTS (${offlineSlots.size})", style = MaterialTheme.typography.labelLarge, color = MysteryGold)
+        // Google Drive BoxBoyZombies/Saves Vault Section
+        Spacer(modifier = Modifier.height(8.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, MysteryGold.copy(alpha = 0.75f), RoundedCornerShape(12.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "GOOGLE DRIVE • ${driveSyncState.targetFolderPath} (${driveSyncState.driveFiles.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MysteryGold
+                        )
+                        Text(
+                            text = driveSyncState.statusMessage,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CryoCyan
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(
+                            onClick = onReconcileGoogleDrive,
+                            modifier = Modifier.testTag("reconcile_google_drive_button")
+                        ) {
+                            Text("NEWEST-WINS SYNC")
+                        }
+                        OutlinedButton(
+                            onClick = onRefreshGoogleDrive,
+                            modifier = Modifier.testTag("refresh_google_drive_button")
+                        ) {
+                            Text("REFRESH")
+                        }
+                        Button(
+                            onClick = { onSyncToGoogleDrive(slotTitle) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MysteryGold,
+                                contentColor = HandheldObsidian
+                            ),
+                            modifier = Modifier.testTag("save_google_drive_button")
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("DRIVE UPLOAD")
+                        }
+                    }
+                }
+
+                // Multi-Tier Retention Policy Selector ("All" modes supported)
+                Text(
+                    text = "Upload Retention Mode (${driveSyncState.retentionPolicy.subtitle}):",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    DriveUploadRetentionPolicy.entries.forEach { policy ->
+                        FilterChip(
+                            selected = driveSyncState.retentionPolicy == policy,
+                            onClick = { onSelectDriveRetentionPolicy(policy) },
+                            label = { Text(policy.label, style = MaterialTheme.typography.labelSmall) },
+                            modifier = Modifier.testTag("drive_policy_${policy.name.lowercase()}")
+                        )
+                    }
+                }
+
+                if (driveSyncState.driveFiles.isEmpty()) {
+                    Text(
+                        text = "No JSON save envelopes in ${driveSyncState.targetFolderPath} yet. Tap DRIVE UPLOAD or SAVE ALL to write primary, rolling .bak, and archive envelopes.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    driveSyncState.driveFiles.forEach { dFile ->
+                        val kindColor = when (dFile.fileKind) {
+                            DriveEnvelopeFileKind.PRIMARY_SLOT -> MysteryGold
+                            DriveEnvelopeFileKind.ROLLING_BACKUP -> CryoCyan
+                            DriveEnvelopeFileKind.TIMESTAMPED_ARCHIVE -> PhosphorGreen
+                        }
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = HandheldChassis),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, kindColor.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "[${dFile.fileKind.shortBadge}]",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = kindColor,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = dFile.slotName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MysteryGold
+                                        )
+                                    }
+                                    Text(
+                                        "Wave ${dFile.highestWave} • ${dFile.totalKills} Kills • ${dFile.points} PTS • ${dFile.loadoutSummary}",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    val checksumShort = dFile.sha256Checksum.take(8).ifBlank { "verified" }
+                                    Text(
+                                        text = "${dFile.folderPath}/${dFile.fileName} • ${dFile.conflictStatus.badgeText} • SHA-256: $checksumShort",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (dFile.checksumVerified) PhosphorGreen else ZombieCrimson
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        onLoadGoogleDriveSlot(dFile)
+                                        onDismiss()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PhosphorGreen, contentColor = HandheldObsidian),
+                                    modifier = Modifier.testTag("load_drive_${dFile.driveFileId}")
+                                ) {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("RESTORE")
+                                }
+                                IconButton(onClick = { onDeleteGoogleDriveSlot(dFile.driveFileId) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete Google Drive Save Envelope", tint = ZombieCrimson)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Text("LOCAL ENCRYPTED CHRONICLES (${offlineSlots.size})", style = MaterialTheme.typography.labelLarge, color = PhosphorGreen)
         if (offlineSlots.isEmpty()) {
             Text(
                 "No local offline states saved yet. Tap SAVE above to write an instant encrypted state on this device.",
@@ -629,6 +814,143 @@ fun ControllerMapperDialog(
             )
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (config.highContrastMode) HighContrastBlack else HandheldObsidian
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    width = if (config.highContrastMode) 2.5.dp else 1.5.dp,
+                    color = if (config.highContrastMode) HighContrastYellow else MysteryGold,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .testTag("accessibility_settings_card")
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "HIGH CONTRAST & ACCESSIBILITY MODE (WCAG AAA)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (config.highContrastMode) HighContrastYellow else MysteryGold
+                        )
+                        Text(
+                            "21:1 luminance contrast, 56dp touch targets, geometric colorblind symbols & reduced motion",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (config.highContrastMode) HighContrastWhite else CryoCyan
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            val enableAll = !(config.highContrastMode && config.largeTouchTargetsAndText)
+                            onUpdateConfig {
+                                it.copy(
+                                    highContrastMode = enableAll,
+                                    largeTouchTargetsAndText = enableAll,
+                                    colorblindHazardMarkers = enableAll,
+                                    reduceMotionAndFlashes = enableAll,
+                                    crtScanlinesEnabled = !enableAll,
+                                    dpadScalePercent = if (enableAll) 130 else 110,
+                                    buttonOpacityPercent = if (enableAll) 100 else 82
+                                )
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (config.highContrastMode) HighContrastYellow else MysteryGold,
+                            contentColor = HighContrastBlack
+                        ),
+                        modifier = Modifier.testTag("a11y_full_suite_button")
+                    ) {
+                        Text(if (config.highContrastMode && config.largeTouchTargetsAndText) "RESET A11Y" else "FULL A11Y")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("High Contrast Mode (Pure Black / Yellow / White)", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = config.highContrastMode,
+                        onCheckedChange = { checked ->
+                            onUpdateConfig {
+                                it.copy(
+                                    highContrastMode = checked,
+                                    crtScanlinesEnabled = if (checked) false else it.crtScanlinesEnabled
+                                )
+                            }
+                        },
+                        modifier = Modifier.testTag("a11y_high_contrast_switch")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Large Typography & >=56dp Touch Targets", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = config.largeTouchTargetsAndText,
+                        onCheckedChange = { checked ->
+                            onUpdateConfig {
+                                it.copy(
+                                    largeTouchTargetsAndText = checked,
+                                    dpadScalePercent = if (checked && it.dpadScalePercent < 125) 125 else it.dpadScalePercent
+                                )
+                            }
+                        },
+                        modifier = Modifier.testTag("a11y_large_targets_switch")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Colorblind Geometric Hazard Markers (▲ ◆ ⬡ ✚)", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = config.colorblindHazardMarkers,
+                        onCheckedChange = { checked ->
+                            onUpdateConfig { it.copy(colorblindHazardMarkers = checked) }
+                        },
+                        modifier = Modifier.testTag("a11y_colorblind_shapes_switch")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Reduce Motion, Screen Shake & Strobe Flashes", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = config.reduceMotionAndFlashes,
+                        onCheckedChange = { checked ->
+                            onUpdateConfig {
+                                it.copy(
+                                    reduceMotionAndFlashes = checked,
+                                    crtScanlinesEnabled = if (checked) false else it.crtScanlinesEnabled
+                                )
+                            }
+                        },
+                        modifier = Modifier.testTag("a11y_reduce_motion_switch")
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(6.dp))
         HorizontalDivider(color = PhosphorGreen.copy(alpha = 0.25f))
         Spacer(modifier = Modifier.height(6.dp))
@@ -735,7 +1057,20 @@ fun P2pMultiplayerSyncDialog(
     onPushSaveSocket: () -> Unit,
     onExportCapsule: () -> String,
     onImportCapsule: (String) -> Result<CryptoSyncEngine.GameSaveSnapshot>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    oasisStatus: OasisSessionStatus = OasisSessionStatus(),
+    oasisEndpointConfig: LfsServerEndpointConfig = LfsServerEndpointConfig(),
+    coopPeers: List<CoopPeerState> = emptyList(),
+    networkHealth: NetworkHealthSnapshot = NetworkHealthSnapshot(manualPrivateOverride = true),
+    onRefreshNetworkHealth: () -> Unit = {},
+    onSetPrivateNetworkOverride: (Boolean) -> Unit = {},
+    onUpdateCustomServerUrl: (String) -> Unit = {},
+    onLaunchOrJoinLfsRoom: (String, LfsHostMode, LfsLifecyclePolicy) -> Unit = { _, _, _ -> },
+    onMigrateHostMode: (LfsHostMode) -> Unit = {},
+    onRefreshPublicRooms: () -> Unit = {},
+    onDisconnectLfsRoom: () -> Unit = {},
+    onToggleSquadBot: (OasisBotPersona) -> Unit = {},
+    onFillSquadWithBots: () -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
     var targetHostIp by remember {
@@ -744,16 +1079,91 @@ fun P2pMultiplayerSyncDialog(
             else p2pStatus.discoveredPeers.firstOrNull() ?: "192.168.1.100"
         )
     }
+    var roomCodeInput by remember(oasisStatus.roomCode) {
+        mutableStateOf(
+            oasisStatus.roomCode.ifBlank { OasisHostedServerClient.generateRoomCode() }
+        )
+    }
+    var selectedHostMode by remember(oasisStatus.hostMode) { mutableStateOf(oasisStatus.hostMode) }
+    var selectedLifecycle by remember(oasisStatus.lifecyclePolicy) { mutableStateOf(oasisStatus.lifecyclePolicy) }
+    var customServerUrlInput by remember(oasisEndpointConfig.customServerUrl) {
+        mutableStateOf(oasisEndpointConfig.customServerUrl)
+    }
     var customPeerMessage by remember { mutableStateOf("COVER ME - RELOADING!") }
     var importText by remember { mutableStateOf("") }
     var syncFeedback by remember { mutableStateOf<String?>(null) }
 
     EmulatorModalContainer(
-        title = "EASY 2-STEP CO-OP MULTIPLAYER & P2P DEVICE SYNC",
-        subtitle = "Zero-config Wi-Fi LAN, USB Cable Tunnel, or Bluetooth Capsule Link",
+        title = "LFS OASIS HOSTED SERVER & P2P CO-OP COMMAND DECK",
+        subtitle = "play.lewisfamilysystems.com • 3-Tier Failover • 4-Player Squad & AI Bots",
         onDismiss = onDismiss
     ) {
-        Text("CHOOSE HOW YOU WANT TO CONNECT", style = MaterialTheme.typography.labelLarge, color = MysteryGold)
+        // NETWORK HEALTH SERVICE: Tailscale & VPN Private Network Probe Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    width = 1.5.dp,
+                    color = if (networkHealth.isPrivateNetworkDetected) PhosphorGreen else MysteryGold.copy(alpha = 0.8f),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .testTag("network_health_banner")
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (networkHealth.isPrivateNetworkDetected) {
+                                "NETWORK HEALTH: PRIVATE TAILSCALE / VPN DETECTED"
+                            } else {
+                                "NETWORK HEALTH: PUBLIC / STANDARD LAN"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (networkHealth.isPrivateNetworkDetected) PhosphorGreen else MysteryGold
+                        )
+                        Text(
+                            text = networkHealth.statusHeadline,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CryoCyan
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onRefreshNetworkHealth,
+                        modifier = Modifier.testTag("network_health_scan_button")
+                    ) {
+                        Text("SCAN VPN")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Private Network Override (Show LFS Oasis Server Card)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = networkHealth.manualPrivateOverride,
+                        onCheckedChange = onSetPrivateNetworkOverride,
+                        modifier = Modifier.testTag("network_health_override_switch")
+                    )
+                }
+            }
+        }
+
+        Text("1. SELECT MULTIPLAYER TRANSPORT TIER", style = MaterialTheme.typography.labelLarge, color = MysteryGold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SyncTransportMode.entries.forEach { mode ->
                 FilterChip(
@@ -767,6 +1177,305 @@ fun P2pMultiplayerSyncDialog(
             }
         }
 
+        // CONDITIONALLY DISPLAYED HOSTED LFS SERVER DUAL-MODE COMMAND PANEL
+        // Shown when NetworkHealthService detects an active Tailscale interface / VPN profile or manual override
+        if (networkHealth.shouldShowOasisServerConfig) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.5.dp, PhosphorGreen.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .testTag("lfs_oasis_config_card")
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "LFS OASIS DUAL-MODE SERVER HOSTER (U1/U2 :19448)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = PhosphorGreen
+                            )
+                            Text(
+                                "Room: ${oasisStatus.roomCode} • Epoch: ${oasisStatus.hostEpoch} • Tier: ${oasisStatus.transportTier}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CryoCyan
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                roomCodeInput = OasisHostedServerClient.generateRoomCode()
+                                syncFeedback = "Generated Crockford Base32 code: $roomCodeInput"
+                            }
+                        ) {
+                            Text("NEW CODE")
+                        }
+                    }
+
+                    Text(
+                        oasisStatus.statusHeadline,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MysteryGold
+                    )
+
+                    // Preset Endpoint Selector + Custom LFS Server Override
+                    Text("LFS SERVER ENDPOINT (U1 / U2 / U3 / TAILSCALE):", style = MaterialTheme.typography.labelSmall, color = CryoCyan)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            "play.lewisfamilysystems.com" to "",
+                            "sync.lewisfamilysystems.com" to "https://sync.lewisfamilysystems.com",
+                            "Local Hoster (:19448)" to "http://127.0.0.1:19448"
+                        ).forEach { (label, url) ->
+                            FilterChip(
+                                selected = customServerUrlInput == url,
+                                onClick = {
+                                    customServerUrlInput = url
+                                    onUpdateCustomServerUrl(url)
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                        if (networkHealth.tailscaleIp != null) {
+                            val tsUrl = "http://${networkHealth.tailscaleIp}:19448"
+                            FilterChip(
+                                selected = customServerUrlInput == tsUrl,
+                                onClick = {
+                                    customServerUrlInput = tsUrl
+                                    onUpdateCustomServerUrl(tsUrl)
+                                },
+                                label = { Text("Tailscale (${networkHealth.tailscaleIp}:19448)") }
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = customServerUrlInput,
+                        onValueChange = {
+                            customServerUrlInput = it
+                            onUpdateCustomServerUrl(it)
+                        },
+                        label = { Text("Custom LFS Server URL / Tailscale IP (Optional Override)") },
+                        placeholder = { Text("https://play.lewisfamilysystems.com or http://100.x.y.z:19448") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Dual-Mode Host Selector (HOST-01 vs HOST-02)
+                    Text("DUAL-MODE AUTHORITY (HOST-01 / HOST-02):", style = MaterialTheme.typography.labelSmall, color = MysteryGold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LfsHostMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = selectedHostMode == mode,
+                                onClick = { selectedHostMode = mode },
+                                label = { Text(mode.title) }
+                            )
+                        }
+                    }
+
+                    // Lifecycle Policy Selector (HOST-03)
+                    Text("SERVER LIFECYCLE POLICY (HOST-03):", style = MaterialTheme.typography.labelSmall, color = CryoCyan)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        LfsLifecyclePolicy.entries.forEach { policy ->
+                            FilterChip(
+                                selected = selectedLifecycle == policy,
+                                onClick = { selectedLifecycle = policy },
+                                label = { Text(policy.wireId) }
+                            )
+                        }
+                    }
+
+                    // Room Code Input + Launch/Join + Live Migration (HOST-04)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = roomCodeInput,
+                            onValueChange = { roomCodeInput = it.uppercase() },
+                            label = { Text("LFS Room Code (LFS-XXXXXX)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(roomCodeInput))
+                                syncFeedback = "Copied Room Code $roomCodeInput!"
+                            }
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Room Code", tint = PhosphorGreen)
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                onLaunchOrJoinLfsRoom(roomCodeInput, selectedHostMode, selectedLifecycle)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = PhosphorGreen, contentColor = HandheldObsidian),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = "Launch or Join LFS Room")
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (oasisStatus.isConnected) "RE-SYNC LFS ROOM" else "LAUNCH / JOIN LFS ROOM")
+                        }
+                        if (oasisStatus.isConnected) {
+                            OutlinedButton(
+                                onClick = {
+                                    val nextMode = if (oasisStatus.hostMode == LfsHostMode.LAUNCH_U2_HOSTING_SERVICE) {
+                                        LfsHostMode.HOST_LOCAL_DEVICE
+                                    } else {
+                                        LfsHostMode.LAUNCH_U2_HOSTING_SERVICE
+                                    }
+                                    selectedHostMode = nextMode
+                                    onMigrateHostMode(nextMode)
+                                }
+                            ) {
+                                Text("MIGRATE (<300ms)")
+                            }
+                            OutlinedButton(onClick = onDisconnectLfsRoom) {
+                                Text("LEAVE")
+                            }
+                        }
+                    }
+
+                    // Active Public LFS Rooms Browser
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "PUBLIC ROOMS ON SERVER (${oasisStatus.publicRooms.size}):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MysteryGold
+                        )
+                        OutlinedButton(onClick = onRefreshPublicRooms) {
+                            Text("REFRESH ROOMS")
+                        }
+                    }
+                    if (oasisStatus.publicRooms.isNotEmpty()) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            oasisStatus.publicRooms.take(6).forEach { room ->
+                                Button(
+                                    onClick = {
+                                        roomCodeInput = room.roomCode
+                                        onLaunchOrJoinLfsRoom(room.roomCode, selectedHostMode, selectedLifecycle)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CryoCyan, contentColor = HandheldObsidian)
+                                ) {
+                                    Text("JOIN ${room.roomCode} (W${room.wave} • ${room.activePlayers}/${room.maxPlayers})")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MysteryGold.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                    .testTag("lfs_oasis_hidden_notice")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "LFS OASIS SERVER CONFIG HIDDEN (PUBLIC NETWORK)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MysteryGold
+                        )
+                        Text(
+                            "Connect to Tailscale (100.x.y.z) or an active VPN profile, or toggle Private Network Override above to configure LFS Oasis Hoster.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CryoCyan
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(onClick = { onSetPrivateNetworkOverride(true) }) {
+                        Text("UNLOCK")
+                    }
+                }
+            }
+        }
+
+        // 4/4 CO-OP SQUAD ROSTER & AUTONOMOUS AI SQUAD BOTS (@willow, @cinder, @mote)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, MysteryGold.copy(alpha = 0.75f), RoundedCornerShape(12.dp))
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            "4/4 SQUAD ROSTER & OASIS AI BOTS (${1 + coopPeers.size}/4 ACTIVE)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MysteryGold
+                        )
+                        Text(
+                            "Bots auto-revive downed teammates, kite bosses, and call out tactical actions",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CryoCyan
+                        )
+                    }
+                    Button(
+                        onClick = onFillSquadWithBots,
+                        colors = ButtonDefaults.buttonColors(containerColor = MysteryGold, contentColor = HandheldObsidian)
+                    ) {
+                        Text("FILL 4/4 SQUAD")
+                    }
+                }
+
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OasisBotPersona.entries.forEach { persona ->
+                        val isSpawned = coopPeers.any { it.isAiBot && it.botPersonaId == persona.id }
+                        FilterChip(
+                            selected = isSpawned,
+                            onClick = { onToggleSquadBot(persona) },
+                            label = {
+                                Text(if (isSpawned) "${persona.displayName} [ACTIVE]" else "+ ${persona.displayName}")
+                            }
+                        )
+                    }
+                }
+
+                if (coopPeers.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(HandheldChassis, RoundedCornerShape(8.dp))
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        coopPeers.forEach { peer ->
+                            val statusTag = if (peer.isDowned) "DOWNED (${peer.bleedoutRemainingMs / 1000}s)" else "HP ${peer.hp}/${peer.maxHp}"
+                            Text(
+                                text = "• ${peer.callsign} [${if (peer.isAiBot) "AI BOT" else "LIVE PEER"}] — $statusTag — ${peer.radioCalloutText}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (peer.isDowned) ZombieCrimson else PhosphorGreen
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Step-by-Step Visual Guide based on selected transport
         Card(
             colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
@@ -776,6 +1485,19 @@ fun P2pMultiplayerSyncDialog(
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (p2pStatus.transportMode) {
+                    SyncTransportMode.LFS_HOSTED_SERVER -> {
+                        Text("LFS DEDICATED SERVER (U1/U2) GUIDE", style = MaterialTheme.typography.titleMedium, color = PhosphorGreen)
+                        Text("• STEP 1: Tap 'LAUNCH / JOIN LFS ROOM' above with any LFS-XXXXXX code.", style = MaterialTheme.typography.bodyMedium)
+                        Text("• STEP 2: Share the 6-character code with up to 3 friends anywhere on Earth — zero port forwarding needed!", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    SyncTransportMode.LFS_LOCAL_HOST_TUNNEL -> {
+                        Text("HOST ON DEVICE + LFS REVERSE TUNNEL", style = MaterialTheme.typography.titleMedium, color = CryoCyan)
+                        Text("• Your phone runs the authoritative 60 FPS simulation and exposes a NAT-free reverse WebSocket tunnel through sync.lewisfamilysystems.com.", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    SyncTransportMode.FIRESTORE_CLOUD_RELAY -> {
+                        Text("CLOUD ROOM RELAY (FIRESTORE) GUIDE", style = MaterialTheme.typography.titleMedium, color = MysteryGold)
+                        Text("• Automatic Tier-B internet room relay synchronized by LFS-XXXXXX room code when dedicated WebSocket ports are blocked.", style = MaterialTheme.typography.bodyMedium)
+                    }
                     SyncTransportMode.LAN_WIFI -> {
                         Text("WI-FI / HOTSPOT QUICK GUIDE (CRAZY EASY 2 STEPS)", style = MaterialTheme.typography.titleMedium, color = CryoCyan)
                         Text("• STEP 1 (Host): Tap 'START HOSTING ROOM' below. Your phone broadcasts a LAN beacon automatically.", style = MaterialTheme.typography.bodyMedium)
@@ -820,7 +1542,7 @@ fun P2pMultiplayerSyncDialog(
             }
         }
 
-        // Live Host / Join Controls
+        // Live Direct LAN / USB / Bluetooth Host / Join Controls (Tier C)
         Card(
             colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
             modifier = Modifier
@@ -835,7 +1557,7 @@ fun P2pMultiplayerSyncDialog(
                 ) {
                     Column {
                         Text(
-                            "YOUR ROOM IP: ${p2pStatus.localIpAddress}:48899",
+                            "DIRECT LAN / USB SOCKET: ${p2pStatus.localIpAddress}:48899",
                             style = MaterialTheme.typography.titleMedium,
                             color = PhosphorGreen
                         )
@@ -911,7 +1633,7 @@ fun P2pMultiplayerSyncDialog(
                     }
                 }
 
-                if (p2pStatus.isConnected) {
+                if (p2pStatus.isConnected || oasisStatus.isConnected) {
                     Button(
                         onClick = onPushSaveSocket,
                         colors = ButtonDefaults.buttonColors(containerColor = MysteryGold, contentColor = HandheldObsidian),
@@ -919,7 +1641,7 @@ fun P2pMultiplayerSyncDialog(
                     ) {
                         Icon(Icons.Default.CloudUpload, contentDescription = "Push Save")
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("SYNC ENCRYPTED SAVE TO CONNECTED FRIEND NOW")
+                        Text("SYNC ENCRYPTED SAVE TO CONNECTED SQUAD NOW")
                     }
                 }
             }
@@ -944,7 +1666,7 @@ fun P2pMultiplayerSyncDialog(
                         color = CryoCyan
                     )
                     Text(
-                        "TX: ${p2pStatus.packetsSent} • RX: ${p2pStatus.packetsReceived}",
+                        "TX: ${p2pStatus.packetsSent + oasisStatus.packetsSent} • RX: ${p2pStatus.packetsReceived + oasisStatus.packetsReceived}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MysteryGold
                     )
@@ -1579,7 +2301,7 @@ fun AiTacticalDirectorDialog(
 }
 
 @Composable
-private fun EmulatorModalContainer(
+internal fun EmulatorModalContainer(
     title: String,
     subtitle: String,
     onDismiss: () -> Unit,

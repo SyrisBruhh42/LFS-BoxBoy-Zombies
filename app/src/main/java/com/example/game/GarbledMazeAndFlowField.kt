@@ -459,11 +459,12 @@ class FlowFieldServer(
         playerX: Float,
         playerY: Float,
         coopPeerX: Float?,
-        coopPeerY: Float?
+        coopPeerY: Float?,
+        extraTargets: List<Pair<Float, Float>> = emptyList()
     ) {
         if (clockMs - lastUpdateClockMs < updateIntervalMs && lastUpdateClockMs >= 0L) return
         lastUpdateClockMs = clockMs
-        recomputeDijkstraField(map, unlockedRooms, fortifications, playerX, playerY, coopPeerX, coopPeerY)
+        recomputeDijkstraField(map, unlockedRooms, fortifications, playerX, playerY, coopPeerX, coopPeerY, extraTargets)
     }
 
     private fun recomputeDijkstraField(
@@ -473,7 +474,8 @@ class FlowFieldServer(
         playerX: Float,
         playerY: Float,
         coopPeerX: Float?,
-        coopPeerY: Float?
+        coopPeerY: Float?,
+        extraTargets: List<Pair<Float, Float>> = emptyList()
     ) {
         val rooms = map.rooms
         val roomCount = rooms.size
@@ -560,7 +562,7 @@ class FlowFieldServer(
             }
         }
 
-        // 2. Seed BFS / Dijkstra queue with Player (and Co-Op Partner) cells
+        // 2. Seed BFS / Dijkstra queue with Player and all living 4-Player Squad Peers
         var head = 0
         var tail = 0
 
@@ -578,6 +580,10 @@ class FlowFieldServer(
         seedTarget(playerX, playerY)
         if (coopPeerX != null && coopPeerY != null) {
             seedTarget(coopPeerX, coopPeerY)
+        }
+        for (i in 0 until extraTargets.size) {
+            val (ex, ey) = extraTargets[i]
+            seedTarget(ex, ey)
         }
 
         while (head < tail) {

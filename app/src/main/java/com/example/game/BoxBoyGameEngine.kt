@@ -1,8 +1,10 @@
 package com.example.game
 
 import com.example.data.DEFAULT_WEAPONS
+import com.example.data.OasisBotPersona
 import com.example.data.PerkType
 import com.example.data.WeaponSpec
+import com.example.network.CoopPeerState
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -161,6 +163,12 @@ data class GameSessionState(
     // Phase 5: 7-Slot RPG Armor Rig, Palette Shader, Upgrade Anvil & Depth Escrow
     val armorRig: ArmorRigState = ArmorRigState(),
     val depthEscrow: DepthEscrowState = DepthEscrowState(),
+    // Phase 6 (ARGON 4): 4-Player Co-Op Squad, Downed/Revive State & Async 600px Chunk Streamer
+    val coopPeers: List<CoopPeerState> = emptyList(),
+    val isPlayerDowned: Boolean = false,
+    val playerBleedoutRemainingMs: Long = 30_000L,
+    val playerReviveProgress: Float = 0f,
+    val chunkSnapshot: ChunkStreamSnapshot = ChunkStreamSnapshot(),
     val clockMs: Long = 0L,
     val isPaused: Boolean = false,
     val isGameOver: Boolean = false,
@@ -411,6 +419,10 @@ class BoxBoyGameEngine {
             depthEscrow = depthEscrow.copy(deepestMazeDepthReached = updatedMazeState.totalDoorwaysCrossed + 1)
         }
 
+        val activeSquadTargets = state.coopPeers
+            .filter { !it.isDowned && it.hp > 0 }
+            .map { Pair(it.x, it.y) }
+
         flowFieldServer.updateIfDue(
             clockMs = clockMs,
             map = mazeSyncedMap,
@@ -419,7 +431,8 @@ class BoxBoyGameEngine {
             playerX = nx,
             playerY = ny,
             coopPeerX = coopPeerX,
-            coopPeerY = coopPeerY
+            coopPeerY = coopPeerY,
+            extraTargets = activeSquadTargets
         )
 
         // PHASE 4: Light-Lock Auto-Aim & Lantern Illumination Synergy + Responsive Turning
@@ -818,16 +831,67 @@ class BoxBoyGameEngine {
             banners.add(FloatingBanner("WAVE $wave!", nx, ny - 30f, 0xFFFFD166, ttlMs = 1500L))
         }
 
-        // 5. Phase 2 Flow-Field Driven Enemy Movement & Melee Attacks (Smooth Blended Steering + Soft Separation)
+        // 5. Phase 2 & ARGON 4: Multi-Player Squad Bot AI, Dynamic Aggro, Flow-Field Steering & Co-Op Revive
+        var squadPeers = state.coopPeers.map { it.copy() }.toMutableList()
+
+        // Step Autonomous AI Squad Bots (@willow, @cinder, @mote)
+        val botKillsAndPoints = stepSquadBots(
+            squadPeers = squadPeers,
+            deltaMs = scaledDeltaMs,
+            dtSec = dtSec,
+            playerX = nx,
+            playerY = ny,
+            isPlayerDowned = state.isPlayerDowned,
+            wave = wave,
+            map = mazeSyncedMap,
+            unlockedRooms = state.unlockedRooms,
+            zombies = zombies,
+            barrels = barrels,
+            stations = stations,
+            tracers = tracers,
+            particles = particles,
+            banners = banners,
+            lootDrops = lootDrops
+        )
+        totalKills += botKillsAndPoints.first
+        points += botKillsAndPoints.second
+
         val zBaseSpeed = (36f + wave * 2.4f).coerceAtMost(82f) * speedCfg.zombieSpeedMultiplier
         val zombieCount = zombies.size
         for (zi in 0 until zombieCount) {
             val z = zombies[zi]
-            val d1 = hypot(nx - z.x, ny - z.y)
-            val d2 = if (coopPeerX != null && coopPeerY != null) hypot(coopPeerX - z.x, coopPeerY - z.y) else Float.MAX_VALUE
-            val tx = if (d2 < d1 && coopPeerX != null) coopPeerX else nx
-            val ty = if (d2 < d1 && coopPeerY != null) coopPeerY else ny
-            val dist = min(d1, d2).coerceAtLeast(0.001f)
+            // Evaluate distance to player (if not downed) and all living squad members
+            val dPlayer = if (!state.isPlayerDowned || squadPeers.none { !it.isDowned && it.hp > 0 }) {
+                hypot(nx - z.x, ny - z.y)
+            } else {
+                Float.MAX_VALUE
+            }
+            val dLegacyPeer = if (coopPeerX != null && coopPeerY != null) {
+                hypot(coopPeerX - z.x, coopPeerY - z.y)
+            } else {
+                Float.MAX_VALUE
+            }
+
+            var bestTx = if (dLegacyPeer < dPlayer && coopPeerX != null) coopPeerX else nx
+            var bestTy = if (dLegacyPeer < dPlayer && coopPeerY != null) coopPeerY else ny
+            var minDist = min(dPlayer, dLegacyPeer)
+            var targetedPeerIndex = -1
+
+            for (pi in 0 until squadPeers.size) {
+                val peer = squadPeers[pi]
+                if (!peer.isDowned && peer.hp > 0) {
+                    val dp = hypot(peer.x - z.x, peer.y - z.y)
+                    if (dp < minDist) {
+                        minDist = dp
+                        bestTx = peer.x
+                        bestTy = peer.y
+                        targetedPeerIndex = pi
+                    }
+                }
+            }
+            val tx = bestTx
+            val ty = bestTy
+            val dist = minDist.coerceAtLeast(0.001f)
 
             // Check if a player Barricade Wall is blocking this enemy
             val blockingWall = fortifications.firstOrNull {
@@ -896,7 +960,30 @@ class BoxBoyGameEngine {
                     z.x += directVx * step * 0.6f
                     z.y += directVy * step * 0.6f
                 }
-            } else if (d1 <= z.archetype.radius + 18f) {
+            } else if (targetedPeerIndex >= 0 && dist <= z.archetype.radius + 18f) {
+                z.attackCooldownMs = (z.attackCooldownMs - scaledDeltaMs).coerceAtLeast(0L)
+                if (z.attackCooldownMs == 0L) {
+                    z.attackCooldownMs = 1050L
+                    val rawDmg = if (z.archetype == ZombieArchetype.DEVIL_BOSS) 22 else 12
+                    val peer = squadPeers[targetedPeerIndex]
+                    val absorbed = min(peer.shield, rawDmg)
+                    val newShield = peer.shield - absorbed
+                    val newHp = (peer.hp - (rawDmg - absorbed)).coerceAtLeast(0)
+                    val becameDowned = newHp == 0 && !peer.isDowned
+                    squadPeers[targetedPeerIndex] = peer.copy(
+                        hp = newHp,
+                        shield = newShield,
+                        isDowned = peer.isDowned || becameDowned,
+                        bleedoutRemainingMs = if (becameDowned) 30_000L else peer.bleedoutRemainingMs,
+                        reviveProgress = if (becameDowned) 0f else peer.reviveProgress,
+                        radioCalloutText = if (becameDowned) "MAN DOWN! Need revive!" else peer.radioCalloutText,
+                        radioCalloutTtlMs = if (becameDowned) 3500L else peer.radioCalloutTtlMs
+                    )
+                    if (becameDowned) {
+                        banners.add(FloatingBanner("${peer.playerName} DOWNED!", peer.x, peer.y - 22f, 0xFFFF2A54, 1400L))
+                    }
+                }
+            } else if (dPlayer <= z.archetype.radius + 18f && !state.isPlayerDowned) {
                 z.attackCooldownMs = (z.attackCooldownMs - scaledDeltaMs).coerceAtLeast(0L)
                 if (z.attackCooldownMs == 0L) {
                     z.attackCooldownMs = 1050L
@@ -911,10 +998,15 @@ class BoxBoyGameEngine {
             }
         }
 
-        // Check Quick Revive Solo self-revive or Game Over
+        // Step Co-Op Downed Bleedout & Proximity Revive (90f radius, 3.0s standard / 1.5s Quick Revive)
         var activePerks = state.activePerks
+        var isPlayerDowned = state.isPlayerDowned
+        var playerBleedoutMs = state.playerBleedoutRemainingMs
+        var playerReviveProg = state.playerReviveProgress
         var isGameOver = false
-        if (hp <= 0) {
+        val reviveDurationMs = if (PerkType.QUICK_REVIVE in activePerks) 1500f else 3000f
+
+        if (hp <= 0 && !isPlayerDowned) {
             if (PerkType.QUICK_REVIVE in activePerks || state.aiBotEnabled) {
                 activePerks = activePerks - PerkType.QUICK_REVIVE
                 hp = maxHp
@@ -922,9 +1014,80 @@ class BoxBoyGameEngine {
                 zombies.removeIf { hypot(it.x - nx, it.y - ny) < 180f }
                 statusToast = "QUICK REVIVE ACTIVATED — Shockwave cleared nearby undead!"
                 banners.add(FloatingBanner("SELF-REVIVED!", nx, ny - 28f, 0xFF00E5FF, 1500L))
+            } else if (squadPeers.any { !it.isDowned && it.hp > 0 } || (coopPeerX != null && coopPeerY != null)) {
+                isPlayerDowned = true
+                playerBleedoutMs = 30_000L
+                playerReviveProg = 0f
+                statusToast = "DOWNED (30s BLEEDOUT) — Teammate within 90px can revive you!"
+                banners.add(FloatingBanner("DOWNED! AWAITING REVIVE", nx, ny - 28f, 0xFFFFD166, 1500L))
             } else {
                 isGameOver = true
                 statusToast = "SURVIVOR DOWN AT WAVE $wave — Tap Replay Seed or Load Save State"
+            }
+        }
+
+        if (isPlayerDowned) {
+            playerBleedoutMs = (playerBleedoutMs - scaledDeltaMs).coerceAtLeast(0L)
+            val reviverNearPlayer = squadPeers.any { !it.isDowned && it.hp > 0 && hypot(it.x - nx, it.y - ny) <= 90f } ||
+                (coopPeerX != null && coopPeerY != null && hypot(coopPeerX - nx, coopPeerY - ny) <= 90f)
+
+            if (reviverNearPlayer) {
+                playerReviveProg = (playerReviveProg + (scaledDeltaMs.toFloat() / reviveDurationMs)).coerceAtMost(1f)
+                if (playerReviveProg >= 1f) {
+                    isPlayerDowned = false
+                    playerReviveProg = 0f
+                    playerBleedoutMs = 30_000L
+                    hp = 100
+                    shield = 50.coerceAtMost(maxShield)
+                    points += 250
+                    banners.add(FloatingBanner("+250 CO-OP REVIVE!", nx, ny - 30f, 0xFF00FF66, 1500L))
+                    statusToast = "REVIVED BY SQUADMATE — Restored 100 HP + 50 Shield!"
+                }
+            } else {
+                playerReviveProg = (playerReviveProg - (scaledDeltaMs.toFloat() / 6000f)).coerceAtLeast(0f)
+            }
+
+            val anyLivingTeammate = squadPeers.any { !it.isDowned && it.hp > 0 } || (coopPeerX != null && coopPeerY != null)
+            if (playerBleedoutMs <= 0L || !anyLivingTeammate) {
+                isGameOver = true
+                statusToast = "SQUAD WIPED AT WAVE $wave — Tap Replay Seed or Load Save State"
+            }
+        }
+
+        // Step proximity revives for any downed squadPeers
+        for (pi in 0 until squadPeers.size) {
+            val peer = squadPeers[pi]
+            if (peer.isDowned) {
+                val remBleed = (peer.bleedoutRemainingMs - scaledDeltaMs).coerceAtLeast(0L)
+                val playerNearPeer = !isPlayerDowned && hp > 0 && hypot(nx - peer.x, ny - peer.y) <= 90f
+                val otherBotNearPeer = squadPeers.any { other ->
+                    other.peerId != peer.peerId && !other.isDowned && other.hp > 0 && hypot(other.x - peer.x, other.y - peer.y) <= 90f
+                }
+                if (playerNearPeer || otherBotNearPeer) {
+                    val nextProg = (peer.reviveProgress + (scaledDeltaMs.toFloat() / reviveDurationMs)).coerceAtMost(1f)
+                    if (nextProg >= 1f) {
+                        squadPeers[pi] = peer.copy(
+                            hp = 100,
+                            shield = 50,
+                            isDowned = false,
+                            bleedoutRemainingMs = 30_000L,
+                            reviveProgress = 0f,
+                            radioCalloutText = "Back on my feet! Thanks squad!",
+                            radioCalloutTtlMs = 2800L
+                        )
+                        points += 250
+                        banners.add(FloatingBanner("+250 CO-OP REVIVE (${peer.playerName})!", peer.x, peer.y - 26f, 0xFF00FF66, 1500L))
+                        statusToast = "REVIVED ${peer.playerName.uppercase()} (+250 PTS)!"
+                    } else {
+                        squadPeers[pi] = peer.copy(bleedoutRemainingMs = remBleed, reviveProgress = nextProg)
+                    }
+                } else if (remBleed == 0L) {
+                    // Auto-recover AI bot at next wave or keep downed until revived
+                    squadPeers[pi] = peer.copy(bleedoutRemainingMs = 0L, reviveProgress = 0f)
+                } else {
+                    val decayed = (peer.reviveProgress - (scaledDeltaMs.toFloat() / 6000f)).coerceAtLeast(0f)
+                    squadPeers[pi] = peer.copy(bleedoutRemainingMs = remBleed, reviveProgress = decayed)
+                }
             }
         }
 
@@ -1093,6 +1256,14 @@ class BoxBoyGameEngine {
             barrels = barrels
         )
 
+        val chunkSnapshot = WorldChunkStreamer.queryAndStreamSquadChunks(
+            map = updatedMap,
+            playerX = nx,
+            playerY = ny,
+            coopPeers = squadPeers,
+            nowMs = clockMs
+        )
+
         return state.copy(
             map = updatedMap,
             unlockedRooms = unlockedRooms,
@@ -1137,10 +1308,329 @@ class BoxBoyGameEngine {
             inspectedLootDrop = inspectedLootDrop,
             lightLockTargetId = lightLockTargetId,
             depthEscrow = depthEscrow,
+            coopPeers = squadPeers,
+            isPlayerDowned = isPlayerDowned,
+            playerBleedoutRemainingMs = playerBleedoutMs,
+            playerReviveProgress = playerReviveProg,
+            chunkSnapshot = chunkSnapshot,
             clockMs = clockMs,
             isGameOver = isGameOver,
             statusToast = statusToast
         )
+    }
+
+    /**
+     * Spawns or toggles an Oasis AI Squad Bot (@willow, @cinder, @mote) in the 4-player squad roster.
+     */
+    fun spawnOrToggleSquadBot(state: GameSessionState, persona: OasisBotPersona): GameSessionState {
+        val currentPeers = state.coopPeers.toMutableList()
+        val existingIdx = currentPeers.indexOfFirst { it.botPersonaId == persona.id }
+        return if (existingIdx >= 0) {
+            val removed = currentPeers.removeAt(existingIdx)
+            state.copy(
+                coopPeers = currentPeers,
+                statusToast = "REMOVED SQUAD BOT ${removed.playerName} (${currentPeers.size + 1}/4 SQUAD)"
+            )
+        } else {
+            if (currentPeers.size >= 3) {
+                currentPeers.removeFirst()
+            }
+            val angleOffset = (currentPeers.size + 1) * 1.15f
+            val spawnX = (state.playerX + cos(angleOffset) * 62f).coerceIn(140f, 4620f)
+            val spawnY = (state.playerY + sin(angleOffset) * 62f).coerceIn(140f, 2600f)
+            val newBot = CoopPeerState(
+                peerId = "bot_${persona.id}",
+                playerName = persona.displayName,
+                x = spawnX,
+                y = spawnY,
+                vx = 0f,
+                vy = 0f,
+                aimAngleRad = 0f,
+                hp = 100,
+                maxHp = 100,
+                shield = 60,
+                weaponId = persona.preferredWeaponId,
+                weaponLevel = (state.wave / 2 + 1).coerceIn(1, 5),
+                isFiring = false,
+                isDowned = false,
+                bleedoutRemainingMs = 30_000L,
+                reviveProgress = 0f,
+                score = state.points,
+                wave = state.wave,
+                isAiBot = true,
+                botPersonaId = persona.id,
+                visorColorHex = persona.visorColorHex,
+                radioCalloutText = "${persona.displayName} online — ${persona.roleSummary}!",
+                radioCalloutTtlMs = 3200L,
+                updatedAtMs = System.currentTimeMillis()
+            )
+            currentPeers.add(newBot)
+            state.copy(
+                coopPeers = currentPeers,
+                statusToast = "DEPLOYED ${persona.displayName.uppercase()} (${currentPeers.size + 1}/4 SQUAD)"
+            )
+        }
+    }
+
+    /**
+     * Fills remaining open squad slots up to 4/4 with @willow, @cinder, and @mote.
+     */
+    fun fillSquadWithBots(state: GameSessionState): GameSessionState {
+        var nextState = state
+        for (persona in OasisBotPersona.entries) {
+            if (nextState.coopPeers.size >= 3) break
+            if (nextState.coopPeers.none { it.botPersonaId == persona.id }) {
+                nextState = spawnOrToggleSquadBot(nextState, persona)
+            }
+        }
+        return nextState.copy(
+            statusToast = "SQUAD FILLED (4/4): @willow, @cinder & @mote Tactical Bots Active!"
+        )
+    }
+
+    private fun stepSquadBots(
+        squadPeers: MutableList<CoopPeerState>,
+        deltaMs: Long,
+        dtSec: Float,
+        playerX: Float,
+        playerY: Float,
+        isPlayerDowned: Boolean,
+        wave: Int,
+        map: ProceduralMap,
+        unlockedRooms: Set<Int>,
+        zombies: MutableList<ZombieEntity>,
+        barrels: MutableList<ExplosiveBarrel>,
+        stations: MutableList<InteractiveStation>,
+        tracers: MutableList<BulletTracer>,
+        particles: MutableList<ParticleBurst>,
+        banners: MutableList<FloatingBanner>,
+        lootDrops: MutableList<LootDropEntity>
+    ): Pair<Int, Int> {
+        var killsAdded = 0
+        var pointsAdded = 0
+
+        for (i in 0 until squadPeers.size) {
+            val bot = squadPeers[i]
+            if (!bot.isAiBot || bot.isDowned || bot.hp <= 0) continue
+
+            val persona = OasisBotPersona.entries.firstOrNull { it.id == bot.botPersonaId } ?: OasisBotPersona.WILLOW
+            var callout = bot.radioCalloutText
+            var calloutTtl = (bot.radioCalloutTtlMs - deltaMs).coerceAtLeast(0L)
+            if (calloutTtl == 0L) callout = ""
+
+            // 1. Determine movement goal based on Persona
+            var goalX = playerX + cos((i + 1) * 2.09f) * 85f
+            var goalY = playerY + sin((i + 1) * 2.09f) * 85f
+
+            val downedAlly: Pair<Float, Float>? = if (isPlayerDowned) {
+                Pair(playerX, playerY)
+            } else {
+                squadPeers.firstOrNull { it.peerId != bot.peerId && it.isDowned }?.let { Pair(it.x, it.y) }
+            }
+
+            when (persona) {
+                OasisBotPersona.WILLOW -> {
+                    // Medic & Barricade Engineer: rush to downed ally first, else repair damaged window, else flank player
+                    if (downedAlly != null) {
+                        goalX = downedAlly.first
+                        goalY = downedAlly.second
+                        if (callout.isBlank()) {
+                            callout = "Holding revive on downed teammate!"
+                            calloutTtl = 2400L
+                        }
+                    } else {
+                        val damagedWindow = stations.firstOrNull {
+                            it.kind == StationKind.BARRICADE_WINDOW &&
+                                it.roomIndex in unlockedRooms &&
+                                it.barricadePlanks < it.maxPlanks &&
+                                hypot(it.x - bot.x, it.y - bot.y) <= 260f
+                        }
+                        if (damagedWindow != null) {
+                            goalX = damagedWindow.x
+                            goalY = damagedWindow.y
+                            if (hypot(damagedWindow.x - bot.x, damagedWindow.y - bot.y) <= 56f && (clockMs % 600L) < deltaMs * 2) {
+                                val winIdx = stations.indexOfFirst { it.id == damagedWindow.id }
+                                if (winIdx >= 0) {
+                                    stations[winIdx] = stations[winIdx].copy(
+                                        barricadePlanks = (stations[winIdx].barricadePlanks + 1).coerceAtMost(stations[winIdx].maxPlanks)
+                                    )
+                                    callout = "Barricade reinforced!"
+                                    calloutTtl = 2000L
+                                }
+                            }
+                        }
+                    }
+                }
+                OasisBotPersona.CINDER -> {
+                    // Aggressive Crowd-Control: kite near undetonated barrels or orbit horde at 165px
+                    if (downedAlly != null && squadPeers.none { it.botPersonaId == OasisBotPersona.WILLOW.id && !it.isDowned }) {
+                        goalX = downedAlly.first
+                        goalY = downedAlly.second
+                    } else {
+                        val nearestZ = zombies.minByOrNull { hypot(it.x - bot.x, it.y - bot.y) }
+                        if (nearestZ != null) {
+                            val ang = atan2(bot.y - nearestZ.y, bot.x - nearestZ.x)
+                            goalX = nearestZ.x + cos(ang + 0.45f) * 165f
+                            goalY = nearestZ.y + sin(ang + 0.45f) * 165f
+                        }
+                    }
+                }
+                OasisBotPersona.MOTE -> {
+                    // High-Precision Rail/Crit Scout: maintain 250px standoff from priority targets
+                    if (downedAlly != null && hypot(downedAlly.first - bot.x, downedAlly.second - bot.y) < 180f) {
+                        goalX = downedAlly.first
+                        goalY = downedAlly.second
+                    } else {
+                        val priorityTarget = zombies.firstOrNull {
+                            it.archetype == ZombieArchetype.DEVIL_BOSS ||
+                                it.archetype == ZombieArchetype.ABYSSAL_WEAVER ||
+                                it.archetype == ZombieArchetype.CALCIFIED_STALKER
+                        } ?: zombies.minByOrNull { hypot(it.x - bot.x, it.y - bot.y) }
+                        if (priorityTarget != null) {
+                            val ang = atan2(bot.y - priorityTarget.y, bot.x - priorityTarget.x)
+                            goalX = priorityTarget.x + cos(ang) * 245f
+                            goalY = priorityTarget.y + sin(ang) * 245f
+                        }
+                    }
+                }
+            }
+
+            // Move bot smoothly toward (goalX, goalY)
+            val dxGoal = goalX - bot.x
+            val dyGoal = goalY - bot.y
+            val distGoal = hypot(dxGoal, dyGoal)
+            val botSpeed = 195f
+            var nextX = bot.x
+            var nextY = bot.y
+            var vx = 0f
+            var vy = 0f
+            if (distGoal > 18f) {
+                vx = (dxGoal / distGoal) * botSpeed
+                vy = (dyGoal / distGoal) * botSpeed
+                val candX = bot.x + vx * dtSec
+                val candY = bot.y + vy * dtSec
+                if (isWalkable(candX, candY, map, unlockedRooms)) {
+                    nextX = candX
+                    nextY = candY
+                } else if (isWalkable(candX, bot.y, map, unlockedRooms)) {
+                    nextX = candX
+                } else if (isWalkable(bot.x, candY, map, unlockedRooms)) {
+                    nextY = candY
+                }
+            }
+
+            // 2. Bot Weapon Firing & Barrel Detonation
+            var aimRad = bot.aimAngleRad
+            var isFiring = false
+            val fireIntervalMs = when (persona) {
+                OasisBotPersona.WILLOW -> 420L
+                OasisBotPersona.CINDER -> 260L
+                OasisBotPersona.MOTE -> 480L
+            }
+            val botPhaseOffset = (i + 1) * 130L
+            val canFireTick = ((clockMs + botPhaseOffset) % fireIntervalMs) < deltaMs.coerceAtLeast(16L)
+
+            // Check if Cinder can detonate a barrel with zombies nearby
+            val primedBarrel = if (persona == OasisBotPersona.CINDER) {
+                barrels.firstOrNull { b ->
+                    !b.isDetonated &&
+                        b.roomIndex in unlockedRooms &&
+                        hypot(b.x - nextX, b.y - nextY) in 95f..410f &&
+                        zombies.any { z -> hypot(z.x - b.x, z.y - b.y) <= 115f }
+                }
+            } else null
+
+            if (primedBarrel != null && canFireTick) {
+                aimRad = atan2(primedBarrel.y - nextY, primedBarrel.x - nextX)
+                isFiring = true
+                val bIdx = barrels.indexOfFirst { it.id == primedBarrel.id }
+                if (bIdx >= 0) {
+                    barrels[bIdx] = primedBarrel.copy(isDetonated = true)
+                    val (bk, bp) = triggerBarrelExplosion(primedBarrel.x, primedBarrel.y, zombies, particles, banners)
+                    killsAdded += bk
+                    pointsAdded += bp
+                    callout = "BARREL PRIMED — KABOOM! (+$bk)"
+                    calloutTtl = 2600L
+                }
+                tracers.add(
+                    BulletTracer(
+                        startX = nextX,
+                        startY = nextY,
+                        endX = primedBarrel.x,
+                        endY = primedBarrel.y,
+                        colorHex = persona.visorColorHex
+                    )
+                )
+            } else {
+                val targetZombie = when (persona) {
+                    OasisBotPersona.MOTE -> {
+                        zombies.filter { hypot(it.x - nextX, it.y - nextY) <= 520f }
+                            .maxByOrNull {
+                                when (it.archetype) {
+                                    ZombieArchetype.DEVIL_BOSS -> 1000f
+                                    ZombieArchetype.ABYSSAL_WEAVER -> 600f
+                                    ZombieArchetype.CALCIFIED_STALKER -> 500f
+                                    else -> 300f - hypot(it.x - nextX, it.y - nextY) * 0.4f
+                                }
+                            }
+                    }
+                    else -> zombies.minByOrNull { hypot(it.x - nextX, it.y - nextY) }
+                        ?.takeIf { hypot(it.x - nextX, it.y - nextY) <= 420f }
+                }
+
+                if (targetZombie != null) {
+                    aimRad = atan2(targetZombie.y - nextY, targetZombie.x - nextX)
+                    isFiring = true
+                    if (canFireTick) {
+                        val shotDamage = when (persona) {
+                            OasisBotPersona.WILLOW -> 34 + wave * 4
+                            OasisBotPersona.CINDER -> 26 + wave * 3
+                            OasisBotPersona.MOTE -> 54 + wave * 6
+                        }
+                        targetZombie.hp -= shotDamage
+                        tracers.add(
+                            BulletTracer(
+                                startX = nextX + cos(aimRad) * 14f,
+                                startY = nextY + sin(aimRad) * 14f,
+                                endX = targetZombie.x,
+                                endY = targetZombie.y,
+                                colorHex = persona.visorColorHex
+                            )
+                        )
+                        if (targetZombie.hp <= 0) {
+                            killsAdded++
+                            pointsAdded += targetZombie.archetype.rewardPoints
+                            maybeSpawnLootDrop(targetZombie, wave, lootDrops, banners)
+                            if (callout.isBlank() && Random.nextFloat() < 0.35f) {
+                                callout = when (persona) {
+                                    OasisBotPersona.WILLOW -> "Target neutralized! Squad perimeter clear."
+                                    OasisBotPersona.CINDER -> "Scorched another husk!"
+                                    OasisBotPersona.MOTE -> "Rail crit confirmed on ${targetZombie.archetype.label}!"
+                                }
+                                calloutTtl = 2200L
+                            }
+                        }
+                    }
+                }
+            }
+
+            zombies.removeAll { it.hp <= 0 }
+
+            squadPeers[i] = bot.copy(
+                x = nextX,
+                y = nextY,
+                vx = vx,
+                vy = vy,
+                aimAngleRad = aimRad,
+                isFiring = isFiring,
+                wave = wave,
+                radioCalloutText = callout,
+                radioCalloutTtlMs = calloutTtl,
+                updatedAtMs = System.currentTimeMillis()
+            )
+        }
+
+        return Pair(killsAdded, pointsAdded)
     }
 
     private fun maybeSpawnLootDrop(

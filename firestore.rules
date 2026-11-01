@@ -15,6 +15,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidRoomCode(code) {
+      return code is string && code.size() >= 4 && code.size() <= 24 && code.matches('^[A-Z0-9\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -63,6 +67,74 @@ service cloud.firestore {
              data.buttonOpacity is int && data.buttonOpacity >= 10 && data.buttonOpacity <= 100 &&
              data.keyMapCode is string && data.keyMapCode.size() >= 1 && data.keyMapCode.size() <= 1000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Validation Blueprint: MultiplayerRoom (Tier-B Cloud Room Relay)
+    function isValidMultiplayerRoom(data, roomCode) {
+      return data.keys().hasAll([
+               'roomCode', 'hostUserId', 'hostName', 'hostMode', 'lifecyclePolicy',
+               'hostEpoch', 'wave', 'activePlayers', 'maxPlayers', 'status',
+               'worldSnapshotJson', 'latestEventJson', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'roomCode', 'hostUserId', 'hostName', 'hostMode', 'lifecyclePolicy',
+               'hostEpoch', 'wave', 'activePlayers', 'maxPlayers', 'status',
+               'worldSnapshotJson', 'latestEventJson', 'createdAt', 'updatedAt'
+             ]) &&
+             data.roomCode == roomCode &&
+             data.hostUserId is string && data.hostUserId.size() >= 1 && data.hostUserId.size() <= 128 &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 40 &&
+             data.hostMode in ['LAUNCH_U2_HOSTING_SERVICE', 'HOST_LOCAL_DEVICE'] &&
+             data.lifecyclePolicy in ['ON_DEMAND_WAKE', 'AUTO_CLOSE_IDLE', 'KEEP_LIVE_PINNED', 'LEASE_TTL', 'HARDWARE_SYMPATHETIC_YIELD'] &&
+             data.hostEpoch is int && data.hostEpoch >= 1 && data.hostEpoch <= 1000000000 &&
+             data.wave is int && data.wave >= 1 && data.wave <= 9999 &&
+             data.activePlayers is int && data.activePlayers >= 1 && data.activePlayers <= 4 &&
+             data.maxPlayers is int && data.maxPlayers >= 1 && data.maxPlayers <= 4 &&
+             data.status in ['OPEN', 'IN_GAME', 'MIGRATING', 'CLOSED'] &&
+             data.worldSnapshotJson is string && data.worldSnapshotJson.size() <= 32000 &&
+             data.latestEventJson is string && data.latestEventJson.size() <= 8000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Validation Blueprint: RoomPeer (Real-time 4-Player Co-Op Peer State)
+    function isValidRoomPeer(data, roomCode, peerId) {
+      return data.keys().hasAll([
+               'peerId', 'userId', 'roomCode', 'playerName', 'x', 'y', 'vx', 'vy',
+               'aimAngleRad', 'hp', 'maxHp', 'shield', 'weaponId', 'weaponLevel',
+               'isFiring', 'isDowned', 'reviveProgress', 'score', 'wave',
+               'isAiBot', 'botPersonaId', 'visorColorHex', 'radioCalloutText', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'peerId', 'userId', 'roomCode', 'playerName', 'x', 'y', 'vx', 'vy',
+               'aimAngleRad', 'hp', 'maxHp', 'shield', 'weaponId', 'weaponLevel',
+               'isFiring', 'isDowned', 'reviveProgress', 'score', 'wave',
+               'isAiBot', 'botPersonaId', 'visorColorHex', 'radioCalloutText', 'updatedAt'
+             ]) &&
+             data.peerId == peerId &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.roomCode == roomCode &&
+             data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 40 &&
+             (data.x is int || data.x is float) && data.x >= -1000 && data.x <= 10000 &&
+             (data.y is int || data.y is float) && data.y >= -1000 && data.y <= 10000 &&
+             (data.vx is int || data.vx is float) && data.vx >= -5000 && data.vx <= 5000 &&
+             (data.vy is int || data.vy is float) && data.vy >= -5000 && data.vy <= 5000 &&
+             (data.aimAngleRad is int || data.aimAngleRad is float) &&
+             data.hp is int && data.hp >= 0 && data.hp <= 10000 &&
+             data.maxHp is int && data.maxHp >= 1 && data.maxHp <= 10000 &&
+             data.shield is int && data.shield >= 0 && data.shield <= 10000 &&
+             data.weaponId is string && data.weaponId.size() >= 1 && data.weaponId.size() <= 40 &&
+             data.weaponLevel is int && data.weaponLevel >= 1 && data.weaponLevel <= 20 &&
+             data.isFiring is bool &&
+             data.isDowned is bool &&
+             (data.reviveProgress is int || data.reviveProgress is float) && data.reviveProgress >= 0 && data.reviveProgress <= 1 &&
+             data.score is int && data.score >= 0 && data.score <= 100000000 &&
+             data.wave is int && data.wave >= 1 && data.wave <= 9999 &&
+             data.isAiBot is bool &&
+             data.botPersonaId is string && data.botPersonaId.size() <= 32 &&
+             data.visorColorHex is int &&
+             data.radioCalloutText is string && data.radioCalloutText.size() <= 160 &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -135,6 +207,40 @@ service cloud.firestore {
                        isValidId(profileId) &&
                        request.auth.uid == userId &&
                        existing().userId == request.auth.uid;
+    }
+
+    match /multiplayer_rooms/{roomCode} {
+      allow get, list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidRoomCode(roomCode) &&
+                       incoming().hostUserId == request.auth.uid &&
+                       isValidMultiplayerRoom(incoming(), roomCode);
+
+      allow update: if isSignedIn() &&
+                       isValidRoomCode(roomCode) &&
+                       isValidMultiplayerRoom(incoming(), roomCode) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().roomCode == existing().roomCode &&
+                       (existing().hostUserId == request.auth.uid || incoming().hostEpoch > existing().hostEpoch);
+
+      allow delete: if isSignedIn() &&
+                       isValidRoomCode(roomCode) &&
+                       existing().hostUserId == request.auth.uid;
+
+      match /peers/{peerId} {
+        allow get, list: if isSignedIn();
+
+        allow create, update: if isSignedIn() &&
+                                 isValidRoomCode(roomCode) &&
+                                 isValidId(peerId) &&
+                                 isValidRoomPeer(incoming(), roomCode, peerId);
+
+        allow delete: if isSignedIn() &&
+                         isValidRoomCode(roomCode) &&
+                         isValidId(peerId) &&
+                         existing().userId == request.auth.uid;
+      }
     }
   }
 }

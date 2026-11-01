@@ -43,30 +43,49 @@ data class P2pNetworkMessage(
 )
 
 data class CoopPeerState(
+    val peerId: String = "peer_default",
     val peerName: String = "Co-op Survivor",
+    val playerName: String = peerName,
     val x: Float = 420f,
     val y: Float = 420f,
+    val vx: Float = 0f,
+    val vy: Float = 0f,
     val aimAngleRad: Float = 0f,
     val hp: Int = 100,
     val maxHp: Int = 100,
+    val shield: Int = 60,
     val weaponId: String = "pistol",
+    val weaponLevel: Int = 1,
     val isFiring: Boolean = false,
+    val isDowned: Boolean = false,
+    val bleedoutRemainingMs: Long = 30_000L,
+    val reviveProgress: Float = 0f,
     val score: Int = 500,
     val kills: Int = 0,
-    val lastUpdatedMs: Long = 0L
-)
+    val wave: Int = 1,
+    val isAiBot: Boolean = false,
+    val botPersonaId: String = "",
+    val visorColorHex: Long = 0xFF00E5FF,
+    val radioCalloutText: String = "",
+    val radioCalloutTtlMs: Long = 0L,
+    val lastUpdatedMs: Long = 0L,
+    val updatedAtMs: Long = lastUpdatedMs
+) {
+    val callsign: String
+        get() = playerName.ifBlank { peerName }
+}
 
 data class P2pSessionStatus(
     val isHosting: Boolean = false,
     val isConnected: Boolean = false,
-    val transportMode: SyncTransportMode = SyncTransportMode.LAN_WIFI,
+    val transportMode: SyncTransportMode = SyncTransportMode.LFS_HOSTED_SERVER,
     val localIpAddress: String = "127.0.0.1",
     val connectedPeerAddress: String = "",
     val discoveredPeers: List<String> = emptyList(),
     val messageHistory: List<P2pNetworkMessage> = emptyList(),
     val packetsSent: Int = 0,
     val packetsReceived: Int = 0,
-    val statusLog: String = "Offline Ready — Host or Join LAN / USB ADB / P2P Socket",
+    val statusLog: String = "Oasis Ready — Host or Join LFS Server (LFS-XXXXXX), Cloud Relay, or LAN :48899",
     val lastSyncedSlotSummary: String = ""
 )
 
@@ -108,6 +127,9 @@ class LocalP2pSocketManager(
             transportMode = mode,
             localIpAddress = ip,
             statusLog = when (mode) {
+                SyncTransportMode.LFS_HOSTED_SERVER -> "LFS Dedicated Server (U1/U2) ready via play.lewisfamilysystems.com"
+                SyncTransportMode.LFS_LOCAL_HOST_TUNNEL -> "Host on Device + LFS Tunnel ready via sync.lewisfamilysystems.com"
+                SyncTransportMode.FIRESTORE_CLOUD_RELAY -> "Firestore Live Room Relay ready (6-char room code)"
                 SyncTransportMode.LAN_WIFI -> "LAN Mode active ($ip:$DEFAULT_P2P_TCP_PORT)"
                 SyncTransportMode.USB_ADB -> "USB Tunnel ready (adb forward tcp:$DEFAULT_P2P_TCP_PORT tcp:$DEFAULT_P2P_TCP_PORT)"
                 SyncTransportMode.BLUETOOTH_P2P -> "P2P Encrypted Capsule & Direct Socket mode ready"

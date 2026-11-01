@@ -65,6 +65,54 @@ function validControllerProfilePayload(userId, now) {
   };
 }
 
+function validMultiplayerRoomPayload(roomCode, hostUserId, now) {
+  return {
+    roomCode,
+    hostUserId,
+    hostName: "BOXBOY-ALPHA",
+    hostMode: "LAUNCH_U2_HOSTING_SERVICE",
+    lifecyclePolicy: "ON_DEMAND_WAKE",
+    hostEpoch: 1,
+    wave: 3,
+    activePlayers: 2,
+    maxPlayers: 4,
+    status: "OPEN",
+    worldSnapshotJson: '{"type":"HOST_WORLD_SYNC","wave":3}',
+    latestEventJson: '{"type":"WORLD_EVENT","event":"REVIVE_PEER"}',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function validRoomPeerPayload(roomCode, peerId, userId, now) {
+  return {
+    peerId,
+    userId,
+    roomCode,
+    playerName: "@willow",
+    x: 2400.5,
+    y: 1380.25,
+    vx: 12.0,
+    vy: -4.5,
+    aimAngleRad: 1.57,
+    hp: 95,
+    maxHp: 100,
+    shield: 40,
+    weaponId: "shotgun",
+    weaponLevel: 2,
+    isFiring: true,
+    isDowned: false,
+    reviveProgress: 0.0,
+    score: 3400,
+    wave: 3,
+    isAiBot: true,
+    botPersonaId: "willow",
+    visorColorHex: 0xFF38BDF8,
+    radioCalloutText: "Deploying barricade!",
+    updatedAt: now,
+  };
+}
+
 test("1. Unauthenticated user cannot read or list save_slots", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   await assertFails(
@@ -143,6 +191,37 @@ test("8. ControllerProfile CRUD and bounds enforcement work properly", async () 
     aliceDb.collection("users").doc(ALICE_UID).collection("controller_profiles").doc("prof_bad").set({
       ...validControllerProfilePayload(ALICE_UID, now),
       dpadScale: 999,
+    })
+  );
+});
+
+test("9. MultiplayerRoom and RoomPeer CRUD and CAS hostEpoch migration work properly", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const roomCode = "LFS-7K9P2M";
+  const now = new Date(Date.now() - 5000);
+
+  const roomRefAlice = aliceDb.collection("multiplayer_rooms").doc(roomCode);
+  await assertSucceeds(roomRefAlice.set(validMultiplayerRoomPayload(roomCode, ALICE_UID, now)));
+
+  // Bob can read open multiplayer rooms and publish his own peer state
+  const roomRefBob = bobDb.collection("multiplayer_rooms").doc(roomCode);
+  await assertSucceeds(roomRefBob.get());
+
+  const bobPeerRef = roomRefBob.collection("peers").doc("peer_bob_1");
+  await assertSucceeds(bobPeerRef.set(validRoomPeerPayload(roomCode, "peer_bob_1", BOB_UID, new Date())));
+
+  // Bob cannot spoof Alice's userId in a peer doc
+  const spoofPeerRef = roomRefBob.collection("peers").doc("peer_spoof");
+  await assertFails(spoofPeerRef.set(validRoomPeerPayload(roomCode, "peer_spoof", ALICE_UID, new Date())));
+
+  // Bob can migrate room host if hostEpoch increments (CAS fence)
+  await assertSucceeds(
+    roomRefBob.update({
+      hostUserId: BOB_UID,
+      hostMode: "HOST_LOCAL_DEVICE",
+      hostEpoch: 2,
+      updatedAt: new Date(),
     })
   );
 });

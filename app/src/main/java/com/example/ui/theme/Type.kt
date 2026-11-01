@@ -8,70 +8,79 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.R
 
-val PressStartFontFamily = FontFamily(
-    Font(R.font.press_start_2p, FontWeight.Normal)
+// Final Fantasy Inspired Engraved Serif Display & Clean Modern Sans UI Typography
+val CinzelDisplayFamily = FontFamily(
+    Font(R.font.cinzel, FontWeight.Normal),
+    Font(R.font.cinzel, FontWeight.Bold)
+)
+
+val PlusJakartaSansFamily = FontFamily(
+    Font(R.font.plus_jakarta_sans, FontWeight.Normal),
+    Font(R.font.plus_jakarta_sans, FontWeight.Medium),
+    Font(R.font.plus_jakarta_sans, FontWeight.Bold)
 )
 
 val ShareTechMonoFamily = FontFamily(
     Font(R.font.share_tech_mono, FontWeight.Normal)
 )
 
-val SpaceGroteskFamily = FontFamily(
-    Font(R.font.space_grotesk, FontWeight.Normal),
-    Font(R.font.space_grotesk, FontWeight.Bold)
-)
+// Backwards-compatible alias mapped to Cinzel so no legacy references use blocky pixel fonts
+val PressStartFontFamily = CinzelDisplayFamily
+val SpaceGroteskFamily = PlusJakartaSansFamily
 
 val Typography = Typography(
     displayLarge = TextStyle(
-        fontFamily = PressStartFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = 24.sp,
-        lineHeight = 32.sp
+        fontFamily = CinzelDisplayFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 28.sp,
+        lineHeight = 34.sp,
+        letterSpacing = 1.2.sp
     ),
     headlineMedium = TextStyle(
-        fontFamily = PressStartFontFamily,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp
-    ),
-    titleLarge = TextStyle(
-        fontFamily = ShareTechMonoFamily,
+        fontFamily = CinzelDisplayFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 20.sp,
         lineHeight = 26.sp,
-        letterSpacing = 0.5.sp
+        letterSpacing = 0.8.sp
+    ),
+    titleLarge = TextStyle(
+        fontFamily = CinzelDisplayFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 19.sp,
+        lineHeight = 25.sp,
+        letterSpacing = 0.6.sp
     ),
     titleMedium = TextStyle(
-        fontFamily = ShareTechMonoFamily,
+        fontFamily = PlusJakartaSansFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.4.sp
+        fontSize = 15.sp,
+        lineHeight = 21.sp,
+        letterSpacing = 0.3.sp
     ),
     bodyLarge = TextStyle(
-        fontFamily = SpaceGroteskFamily,
+        fontFamily = PlusJakartaSansFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp
     ),
     bodyMedium = TextStyle(
-        fontFamily = SpaceGroteskFamily,
+        fontFamily = PlusJakartaSansFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 13.sp,
-        lineHeight = 18.sp
+        lineHeight = 19.sp
     ),
     labelLarge = TextStyle(
-        fontFamily = ShareTechMonoFamily,
+        fontFamily = PlusJakartaSansFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.8.sp
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.6.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = ShareTechMonoFamily,
-        fontWeight = FontWeight.Normal,
+        fontFamily = PlusJakartaSansFamily,
+        fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.6.sp
+        letterSpacing = 0.4.sp
     )
 )
