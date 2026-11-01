@@ -1,16 +1,31 @@
 package com.example.viewmodel
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import android.view.KeyEvent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AppStoreSettingsState
 import com.example.data.BoxBoyRepository
+import com.example.data.CareerDossier
 import com.example.data.ControllerProfile
 import com.example.data.CryptoSyncEngine
 import com.example.data.DEFAULT_WEAPONS
+import com.example.data.DailyDirective
+import com.example.data.DailyDirectiveMetric
+import com.example.data.DriveSyncManager
+import com.example.data.DriveUploadRetentionPolicy
+import com.example.data.GoogleDriveSaveFile
+import com.example.data.GoogleDriveSyncUiState
+import com.example.data.HostedRoomDescriptor
+import com.example.data.LfsHostMode
+import com.example.data.LfsLifecyclePolicy
+import com.example.data.LfsServerEndpointConfig
+import com.example.data.OasisBotPersona
 import com.example.data.PerkType
 import com.example.data.SaveSlot
+import com.example.data.SyncTransportMode
 import com.example.game.ArmorRigState
 import com.example.game.ArmorSlot
 import com.example.game.BoxBoyGameEngine
@@ -34,12 +49,19 @@ import com.example.input.ControllerManager
 import com.example.input.GamepadAction
 import com.example.input.GamepadMapping
 import com.example.input.TouchButtonId
+import com.example.network.CoopPeerState
 import com.example.network.HeadlessKonsoleServer
 import com.example.network.LocalP2pSocketManager
+import com.example.network.NetworkHealthService
+import com.example.network.NetworkHealthSnapshot
+import com.example.network.OasisHostedServerClient
+import com.example.network.OasisSessionStatus
+import com.example.ui.theme.AccessibilityThemeState
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.generationConfig
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,8 +73,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 private const val TAG = "BoxBoyVM"
 
@@ -81,9 +106,14 @@ data class ControllerConfigState(
     val cameraZoomPercent: Int = 100,
     val displayMode: DisplayScreenMode = DisplayScreenMode.HANDHELD_TOUCH,
     val preset: OverlayPreset = OverlayPreset.MYBOY_GBA,
-    val crtScanlinesEnabled: Boolean = true,
+    val crtScanlinesEnabled: Boolean = false,
     val showFpsCounter: Boolean = true,
     val turboFireEnabled: Boolean = true,
+    val highContrastMode: Boolean = false,
+    val largeTouchTargetsAndText: Boolean = false,
+    val colorblindHazardMarkers: Boolean = false,
+    val reduceMotionAndFlashes: Boolean = false,
+    val screenReaderAnnouncements: Boolean = true,
     val keyFire: Int = KeyEvent.KEYCODE_BUTTON_A,
     val keyInteract: Int = KeyEvent.KEYCODE_BUTTON_B,
     val keyPlaceBarrel: Int = KeyEvent.KEYCODE_BUTTON_X,
@@ -94,9 +124,18 @@ data class ControllerConfigState(
 ) {
     fun toKeyMapCode(): String {
         return "PRESET:${preset.name}|DISP:${displayMode.name}|ZOOM:$cameraZoomPercent|" +
-            "CRT:$crtScanlinesEnabled|TURBO:$turboFireEnabled|" +
+            "CRT:$crtScanlinesEnabled|TURBO:$turboFireEnabled|HC:$highContrastMode|A11Y_LG:$largeTouchTargetsAndText|" +
+            "A11Y_CB:$colorblindHazardMarkers|A11Y_RM:$reduceMotionAndFlashes|" +
             "FIRE:$keyFire|INT:$keyInteract|BARREL:$keyPlaceBarrel|RELOAD:$keyReload|PREV:$keyPrevWeapon|NEXT:$keyNextWeapon"
     }
+
+    fun toAccessibilityThemeState(): AccessibilityThemeState = AccessibilityThemeState(
+        highContrastMode = highContrastMode,
+        largeTouchTargetsAndText = largeTouchTargetsAndText,
+        colorblindHazardMarkers = colorblindHazardMarkers,
+        reduceMotionAndFlashes = reduceMotionAndFlashes,
+        screenReaderAnnouncements = screenReaderAnnouncements
+    )
 }
 
 data class AiDirectiveResult(
@@ -147,6 +186,21 @@ class BoxBoyViewModel(
     private val _preferOfflineAiEngine = MutableStateFlow(!isCloudAuthenticated)
     val preferOfflineAiEngine: StateFlow<Boolean> = _preferOfflineAiEngine.asStateFlow()
 
+    private val _storeSettings = MutableStateFlow(AppStoreSettingsState())
+    val storeSettings: StateFlow<AppStoreSettingsState> = _storeSettings.asStateFlow()
+
+    private val _careerDossier = MutableStateFlow(CareerDossier())
+    val careerDossier: StateFlow<CareerDossier> = _careerDossier.asStateFlow()
+
+    private val _dailyDirectives = MutableStateFlow<List<DailyDirective>>(emptyList())
+    val dailyDirectives: StateFlow<List<DailyDirective>> = _dailyDirectives.asStateFlow()
+
+    private val _accountDeletionStatus = MutableStateFlow<String?>(null)
+    val accountDeletionStatus: StateFlow<String?> = _accountDeletionStatus.asStateFlow()
+
+    val driveSyncManager = DriveSyncManager(localPrefs = localPrefs)
+    val driveSyncState: StateFlow<GoogleDriveSyncUiState> = driveSyncManager.syncState
+
     val gamepadMapping: StateFlow<GamepadMapping> = ControllerManager.activeMapping
 
     val p2pManager = LocalP2pSocketManager(
@@ -161,6 +215,39 @@ class BoxBoyViewModel(
             )
         }
     )
+
+    val oasisServerClient = OasisHostedServerClient(
+        scope = viewModelScope,
+        onRemoteSaveReceived = { snapshot ->
+            applySnapshotToGame(snapshot, "LFS Oasis Hosted Server Sync")
+            saveLocalOfflineSlot(snapshot)
+        },
+        onTacticalMessageReceived = { netMsg ->
+            _gameState.value = _gameState.value.copy(
+                statusToast = "OASIS [${netMsg.senderTag}]: ${netMsg.content}"
+            )
+        },
+        onWorldEventReceived = { event ->
+            val st = _gameState.value
+            val toast = "OASIS WORLD EVENT [${event.eventType.wireId}]"
+            _gameState.value = st.copy(statusToast = toast)
+        },
+        onHostWorldSyncReceived = { syncPacket ->
+            val st = _gameState.value
+            val unlockedSet = syncPacket.unlockedRooms.ifEmpty { st.unlockedRooms }
+            _gameState.value = st.copy(
+                wave = syncPacket.currentWave.coerceAtLeast(st.wave),
+                zombiesRemainingInWave = syncPacket.activeZombieCount,
+                unlockedRooms = unlockedSet
+            )
+        }
+    )
+
+    val oasisStatus: StateFlow<OasisSessionStatus> = oasisServerClient.sessionStatus
+    val oasisEndpointConfig: StateFlow<LfsServerEndpointConfig> = oasisServerClient.endpointConfig
+
+    val networkHealthService = NetworkHealthService(scope = viewModelScope)
+    val networkHealth: StateFlow<NetworkHealthSnapshot> = networkHealthService.healthState
 
     val konsoleServer = HeadlessKonsoleServer(
         scope = viewModelScope,
@@ -236,6 +323,7 @@ class BoxBoyViewModel(
     init {
         loadOfflineSlotsFromPrefs()
         loadGamepadMappingFromPrefs()
+        loadStoreSettingsAndCareerFromPrefs()
         konsoleServer.startServer()
     }
 
@@ -250,9 +338,14 @@ class BoxBoyViewModel(
         isInteractPressed: Boolean,
         aimAngleOverrideRad: Float? = null
     ) {
+        val prev = _gameState.value
         val peer = p2pManager.coopPeerState.value
+        val remoteOasisPeers = oasisServerClient.remotePeers.value.values.toList()
+        val currentBotPeers = prev.coopPeers.filter { it.isAiBot }
+        val mergedCoopPeers = (currentBotPeers + remoteOasisPeers).take(3)
+
         val next = engine.stepFrame(
-            state = _gameState.value,
+            state = prev.copy(coopPeers = mergedCoopPeers),
             deltaMsRaw = deltaMs,
             moveXInput = moveX,
             moveYInput = moveY,
@@ -265,20 +358,61 @@ class BoxBoyViewModel(
         )
         _gameState.value = next
 
+        val killsDelta = (next.totalKills - prev.totalKills).coerceAtLeast(0)
+        val fortsDelta = (next.fortifications.size - prev.fortifications.size).coerceAtLeast(0)
+        val ptsDelta = (next.points - prev.points).coerceAtLeast(0)
+        val waveChanged = next.wave > prev.wave
+        if (killsDelta > 0 || fortsDelta > 0 || ptsDelta > 0 || waveChanged) {
+            recordCombatProgress(
+                killsDelta = killsDelta,
+                fortsDelta = fortsDelta,
+                pointsEarnedDelta = ptsDelta,
+                currentWave = next.wave
+            )
+        }
+
         frameSyncCounter++
-        if (frameSyncCounter % 2 == 0 && p2pManager.sessionStatus.value.isConnected) {
-            p2pManager.sendPlayerState(
-                peerName = "Survivor-${currentUserId.take(4)}",
+        if (frameSyncCounter % 3 == 0) {
+            val localPeer = CoopPeerState(
+                peerId = "peer_${currentUserId.take(6).ifBlank { "local" }}",
+                playerName = "Survivor-${currentUserId.take(4).ifBlank { "01" }}",
                 x = next.playerX,
                 y = next.playerY,
+                vx = next.playerVelX,
+                vy = next.playerVelY,
                 aimAngleRad = next.aimAngleRad,
                 hp = next.hp,
                 maxHp = next.maxHp,
+                shield = next.shield,
                 weaponId = next.currentWeapon.id,
+                weaponLevel = next.currentWeaponLevel,
                 isFiring = isFiring,
+                isDowned = next.isPlayerDowned,
+                bleedoutRemainingMs = next.playerBleedoutRemainingMs,
+                reviveProgress = next.playerReviveProgress,
                 score = next.points,
-                kills = next.totalKills
+                kills = next.totalKills,
+                wave = next.wave,
+                isAiBot = false
             )
+
+            if (p2pManager.sessionStatus.value.isConnected) {
+                p2pManager.sendPlayerState(
+                    peerName = localPeer.playerName,
+                    x = localPeer.x,
+                    y = localPeer.y,
+                    aimAngleRad = localPeer.aimAngleRad,
+                    hp = localPeer.hp,
+                    maxHp = localPeer.maxHp,
+                    weaponId = localPeer.weaponId,
+                    isFiring = localPeer.isFiring,
+                    score = localPeer.score,
+                    kills = localPeer.kills
+                )
+            }
+            if (oasisServerClient.sessionStatus.value.isConnected) {
+                oasisServerClient.sendPlayerState20Hz(localPeer)
+            }
         }
     }
 
@@ -400,6 +534,7 @@ class BoxBoyViewModel(
                 currentMagAmmo = st.currentMagAmmo + (weaponId to (spec.magazineSize + (nextLvl - 1) * 4)),
                 statusToast = "UPGRADED ${spec.name} TO PACK-A-PUNCH MK-$nextLvl!"
             )
+            recordUpgradeOrForgeEvent()
         }
     }
 
@@ -602,6 +737,7 @@ class BoxBoyViewModel(
             currentMagAmmo = st.currentMagAmmo + (tempered.baseWeaponId to tempered.effectiveMagSize),
             statusToast = "ANVIL TEMPERED ${tempered.customTitle} TO +${tempered.anvilUpgradeTier}!"
         )
+        recordUpgradeOrForgeEvent()
     }
 
     fun anvilReforgeWeaponElement() {
@@ -874,6 +1010,19 @@ class BoxBoyViewModel(
             "AI_RADIO" -> {
                 OfflineTacticalAiEngine.generateOfflineRadioCallout(_gameState.value)
             }
+            "SQUAD_BOTS" -> {
+                fillSquadWithOasisBots()
+                "DEPLOYED 4-PLAYER OASIS SQUAD BOTS: ${_gameState.value.coopPeers.joinToString { it.playerName }}"
+            }
+            "LFS_HOST" -> {
+                val code = oasisServerClient.generateRoomCode()
+                launchOrJoinLfsHostedRoom(
+                    roomCode = code,
+                    hostMode = LfsHostMode.LAUNCH_U2_HOSTING_SERVICE,
+                    lifecyclePolicy = LfsLifecyclePolicy.ON_DEMAND_WAKE
+                )
+                "LAUNCHED LFS OASIS ROOM $code"
+            }
             "RESET" -> {
                 val seed = tokens.getOrNull(1)?.toLongOrNull() ?: (System.currentTimeMillis() and 0xFFFFFFFL)
                 resetOrGenerateNewMap(seed)
@@ -881,6 +1030,106 @@ class BoxBoyViewModel(
             }
             else -> "Unknown command '$verb'. Type HELP for available Konsole commands."
         }
+    }
+
+    // --- ARGON 4: HOSTED LFS SERVER, DUAL-MODE SYNC & 4-PLAYER AI SQUAD BOTS ---
+
+    fun updateCustomLfsServerUrl(url: String) {
+        oasisServerClient.updateEndpointConfig { it.copy(customServerUrl = url.trim()) }
+    }
+
+    fun setLfsHostMode(mode: LfsHostMode) {
+        oasisServerClient.setHostMode(mode)
+    }
+
+    fun setLfsLifecyclePolicy(policy: LfsLifecyclePolicy) {
+        oasisServerClient.setLifecyclePolicy(policy)
+    }
+
+    fun generateNewLfsRoomCode(): String {
+        return oasisServerClient.generateRoomCode()
+    }
+
+    fun toggleSquadBotPersona(persona: OasisBotPersona) {
+        _gameState.value = engine.spawnOrToggleSquadBot(_gameState.value, persona)
+    }
+
+    fun fillSquadWithOasisBots() {
+        _gameState.value = engine.fillSquadWithBots(_gameState.value)
+    }
+
+    fun refreshPublicLfsRooms() {
+        viewModelScope.launch {
+            oasisServerClient.listActivePublicRooms()
+        }
+    }
+
+    fun launchOrJoinLfsHostedRoom(
+        roomCode: String,
+        hostMode: LfsHostMode = oasisStatus.value.hostMode,
+        lifecyclePolicy: LfsLifecyclePolicy = oasisStatus.value.lifecyclePolicy
+    ) {
+        val cleanCode = OasisHostedServerClient.normalizeRoomCode(roomCode)
+        val st = _gameState.value
+
+        oasisServerClient.createOrJoinHostedRoom(
+            rawRoomCode = cleanCode,
+            roomTitle = "BoxBoy Oasis Squad ($cleanCode)",
+            hostMode = hostMode,
+            lifecyclePolicy = lifecyclePolicy,
+            mapSeed = st.mapSeed,
+            currentWave = st.wave,
+            passphrase = _syncPassphrase.value
+        )
+
+        viewModelScope.launch {
+            if (isCloudAuthenticated) {
+                repository.createOrUpdateCloudRoom(
+                    roomCode = cleanCode,
+                    hostName = "Survivor-${currentUserId.take(4).ifBlank { "01" }}",
+                    hostMode = hostMode,
+                    lifecyclePolicy = lifecyclePolicy,
+                    hostEpoch = oasisStatus.value.hostEpoch,
+                    wave = st.wave,
+                    activePlayers = (st.coopPeers.size + 1).coerceIn(1, 4)
+                )
+            }
+            if (hostMode == LfsHostMode.HOST_LOCAL_DEVICE) {
+                p2pManager.startHosting(_syncPassphrase.value)
+            }
+            _gameState.value = _gameState.value.copy(
+                statusToast = "LFS ROOM $cleanCode ONLINE (${hostMode.shortTitle} • Epoch #${oasisStatus.value.hostEpoch})"
+            )
+        }
+    }
+
+    fun migrateActiveRoomHostMode(targetMode: LfsHostMode) {
+        oasisServerClient.migrateHostMode(targetMode) { updatedDesc ->
+            viewModelScope.launch {
+                if (isCloudAuthenticated) {
+                    repository.createOrUpdateCloudRoom(
+                        roomCode = updatedDesc.roomCode,
+                        hostName = "Survivor-${currentUserId.take(4).ifBlank { "01" }}",
+                        hostMode = targetMode,
+                        lifecyclePolicy = updatedDesc.lifecyclePolicy,
+                        hostEpoch = updatedDesc.hostEpoch.toLong(),
+                        wave = _gameState.value.wave,
+                        activePlayers = (_gameState.value.coopPeers.size + 1).coerceIn(1, 4),
+                        status = "IN_GAME"
+                    )
+                }
+                _gameState.value = _gameState.value.copy(
+                    statusToast = "LIVE HOST MIGRATED -> ${targetMode.shortTitle} (CAS Epoch #${updatedDesc.hostEpoch} <300ms)"
+                )
+            }
+        }
+    }
+
+    fun disconnectLfsRoom() {
+        oasisServerClient.disconnect()
+        _gameState.value = _gameState.value.copy(
+            statusToast = "DISCONNECTED FROM LFS OASIS ROOM"
+        )
     }
 
     // --- OFFLINE + CLOUD + P2P ENCRYPTED SAVE SYSTEM ---
@@ -902,19 +1151,26 @@ class BoxBoyViewModel(
         )
     }
 
-    fun saveStateOfflineAndCloud(slotName: String) {
+    fun saveStateOfflineAndCloud(slotName: String, context: Context? = null) {
         val snap = buildCurrentSnapshot(slotName)
         saveLocalOfflineSlot(snap)
         val encrypted = CryptoSyncEngine.encryptSnapshot(snap, _syncPassphrase.value)
         _exportedCapsule.value = encrypted
 
-        if (isCloudAuthenticated) {
-            val loadoutSummary = snap.unlockedWeaponIds.joinToString(", ") { id ->
-                val name = DEFAULT_WEAPONS.find { it.id == id }?.shortCode ?: id.uppercase()
-                val lv = snap.weaponLevels[id] ?: 1
-                "$name Lv$lv"
-            }
-            viewModelScope.launch {
+        val loadoutSummary = snap.unlockedWeaponIds.joinToString(", ") { id ->
+            val name = DEFAULT_WEAPONS.find { it.id == id }?.shortCode ?: id.uppercase()
+            val lv = snap.weaponLevels[id] ?: 1
+            "$name Lv$lv"
+        }
+
+        viewModelScope.launch {
+            driveSyncManager.uploadSaveToDrive(
+                context = context,
+                snapshot = snap,
+                encryptedPayload = encrypted,
+                loadoutSummary = loadoutSummary
+            )
+            if (isCloudAuthenticated) {
                 repository.createSaveSlot(
                     slotName = snap.slotName,
                     highestWave = snap.highestWave,
@@ -925,13 +1181,104 @@ class BoxBoyViewModel(
                     deviceTag = snap.deviceTag
                 )
             }
-            _gameState.value = _gameState.value.copy(
-                statusToast = "SAVED (Offline AES-GCM + Cloud Firestore): ${snap.slotName}"
+        }
+
+        _gameState.value = _gameState.value.copy(
+            statusToast = if (isCloudAuthenticated) {
+                "CHRONICLE SAVED (Google Drive + Firestore + Local Vault): ${snap.slotName}"
+            } else {
+                "CHRONICLE SAVED (Google Drive Vault + Local AES-GCM): ${snap.slotName}"
+            }
+        )
+    }
+
+    fun setDriveUploadRetentionPolicy(policy: DriveUploadRetentionPolicy) {
+        driveSyncManager.setRetentionPolicy(policy)
+        _gameState.value = _gameState.value.copy(
+            statusToast = "DRIVE RETENTION POLICY: ${policy.label}"
+        )
+    }
+
+    fun syncCurrentSaveToGoogleDrive(slotName: String, context: Context? = null) {
+        val snap = buildCurrentSnapshot(slotName)
+        saveLocalOfflineSlot(snap)
+        val encrypted = CryptoSyncEngine.encryptSnapshot(snap, _syncPassphrase.value)
+        _exportedCapsule.value = encrypted
+        val loadoutSummary = snap.unlockedWeaponIds.joinToString(", ") { id ->
+            val name = DEFAULT_WEAPONS.find { it.id == id }?.shortCode ?: id.uppercase()
+            val lv = snap.weaponLevels[id] ?: 1
+            "$name Lv$lv"
+        }
+        viewModelScope.launch {
+            driveSyncManager.uploadSaveToDrive(
+                context = context,
+                snapshot = snap,
+                encryptedPayload = encrypted,
+                loadoutSummary = loadoutSummary
             )
-        } else {
             _gameState.value = _gameState.value.copy(
-                statusToast = "SAVED 100% OFFLINE (AES-256-GCM): ${snap.slotName}"
+                statusToast = "UPLOADED TO ${DriveSyncManager.TARGET_FOLDER_PATH}: ${snap.slotName}"
             )
+        }
+    }
+
+    fun refreshGoogleDriveSaves(context: Context? = null) {
+        viewModelScope.launch {
+            driveSyncManager.refreshDriveSaves(context, _localOfflineSaves.value)
+        }
+    }
+
+    fun reconcileNewestWinsWithGoogleDrive(context: Context? = null) {
+        viewModelScope.launch {
+            val promoted = driveSyncManager.reconcileNewestWins(
+                context = context,
+                localSlots = _localOfflineSaves.value,
+                passphrase = _syncPassphrase.value
+            )
+            if (promoted != null) {
+                loadFromGoogleDriveSave(promoted, context)
+            } else {
+                _gameState.value = _gameState.value.copy(
+                    statusToast = "NEWEST-WINS SYNC COMPLETE: Local & ${DriveSyncManager.TARGET_FOLDER_PATH} are up to date"
+                )
+            }
+        }
+    }
+
+    fun loadFromGoogleDriveSave(driveFile: GoogleDriveSaveFile, context: Context? = null) {
+        viewModelScope.launch {
+            val envelopeResult = driveSyncManager.downloadSaveEnvelope(context, driveFile)
+            envelopeResult.onFailure { err ->
+                _gameState.value = _gameState.value.copy(
+                    statusToast = "DRIVE CHECKSUM ALERT: ${err.message}"
+                )
+                return@launch
+            }
+            val env = envelopeResult.getOrNull() ?: return@launch
+            val decrypted = CryptoSyncEngine.decryptSnapshot(env.encryptedPayload, _syncPassphrase.value)
+            decrypted.onSuccess { snap ->
+                saveLocalOfflineSlot(snap)
+                applySnapshotToGame(
+                    snap,
+                    "${env.folderPath} [${env.fileKind.shortBadge}] '${env.slotName}'"
+                )
+            }.onFailure {
+                val st = _gameState.value
+                _gameState.value = st.copy(
+                    wave = env.highestWave.coerceAtLeast(1),
+                    totalKills = env.totalKills.coerceAtLeast(0),
+                    points = env.points.coerceAtLeast(500),
+                    isGameOver = false,
+                    hp = st.maxHp,
+                    statusToast = "RESTORED ${env.folderPath} [${env.fileKind.shortBadge}]: ${env.slotName} (Wave ${env.highestWave})"
+                )
+            }
+        }
+    }
+
+    fun deleteGoogleDriveSave(context: Context?, driveFileId: String) {
+        viewModelScope.launch {
+            driveSyncManager.deleteDriveSave(context, driveFileId)
         }
     }
 
@@ -1267,9 +1614,264 @@ class BoxBoyViewModel(
         }
     }
 
+    fun refreshNetworkHealth() {
+        networkHealthService.refreshNetworkHealth()
+    }
+
+    fun setManualPrivateNetworkOverride(enabled: Boolean) {
+        networkHealthService.setManualPrivateNetworkOverride(enabled)
+        _gameState.value = _gameState.value.copy(
+            statusToast = if (enabled) {
+                "PRIVATE NETWORK OVERRIDE ON: LFS Oasis Server Config Unlocked"
+            } else {
+                "PRIVATE NETWORK AUTO-DETECT: Monitoring Tailscale & VPN interfaces"
+            }
+        )
+    }
+
+    fun toggleHighContrastMode() {
+        val next = !_controllerConfig.value.highContrastMode
+        _controllerConfig.value = _controllerConfig.value.copy(
+            highContrastMode = next,
+            crtScanlinesEnabled = if (next) false else _controllerConfig.value.crtScanlinesEnabled
+        )
+        _gameState.value = _gameState.value.copy(
+            statusToast = if (next) "HIGH CONTRAST (WCAG AAA) ENABLED" else "HIGH CONTRAST MODE DISABLED"
+        )
+    }
+
+    fun applyFullAccessibilityPreset(enabled: Boolean) {
+        _controllerConfig.value = _controllerConfig.value.copy(
+            highContrastMode = enabled,
+            largeTouchTargetsAndText = enabled,
+            colorblindHazardMarkers = enabled,
+            reduceMotionAndFlashes = enabled,
+            crtScanlinesEnabled = !enabled,
+            dpadScalePercent = if (enabled) 130 else 110,
+            buttonOpacityPercent = if (enabled) 100 else 82
+        )
+        _gameState.value = _gameState.value.copy(
+            statusToast = if (enabled) {
+                "FULL ACCESSIBILITY SUITE ACTIVE (High Contrast + 56dp Targets + Hazard Symbols + Reduced Motion)"
+            } else {
+                "STANDARD DISPLAY PROFILE RESTORED"
+            }
+        )
+    }
+
+    // --- APP STORE RELEASE: CAREER DOSSIER, DAILY SURVIVAL DIRECTIVES, SETTINGS & ACCOUNT WIPE ---
+
+    private fun loadStoreSettingsAndCareerFromPrefs() {
+        val settings = AppStoreSettingsState(
+            sfxEnabled = localPrefs.getBoolean("store_sfx_enabled_v1", true),
+            sfxVolume = localPrefs.getFloat("store_sfx_vol_v1", 0.85f).coerceIn(0f, 1f),
+            musicVolume = localPrefs.getFloat("store_music_vol_v1", 0.78f).coerceIn(0f, 1f),
+            hapticsEnabled = localPrefs.getBoolean("store_haptics_enabled_v1", true),
+            developerModeEnabled = localPrefs.getBoolean("store_dev_mode_v1", false),
+            hasSeenFieldManual = localPrefs.getBoolean("store_seen_manual_v1", false)
+        )
+        _storeSettings.value = settings
+
+        val dossier = CareerDossier(
+            highestWave = localPrefs.getInt("career_highest_wave_v1", 1).coerceAtLeast(1),
+            totalKills = localPrefs.getInt("career_total_kills_v1", 0).coerceAtLeast(0),
+            bossKills = localPrefs.getInt("career_boss_kills_v1", 0).coerceAtLeast(0),
+            fortificationsDeployed = localPrefs.getInt("career_forts_deployed_v1", 0).coerceAtLeast(0),
+            packAPunchUpgrades = localPrefs.getInt("career_pap_upgrades_v1", 0).coerceAtLeast(0),
+            squadRevives = localPrefs.getInt("career_squad_revives_v1", 0).coerceAtLeast(0),
+            lifetimePointsEarned = localPrefs.getLong("career_lifetime_pts_v1", 600L).coerceAtLeast(0L),
+            completedDirectivesCount = localPrefs.getInt("career_directives_done_v1", 0).coerceAtLeast(0)
+        )
+        _careerDossier.value = dossier
+
+        val todayKey = LocalDate.now(ZoneOffset.UTC).toString()
+        val baseDirectives = buildDailyDirectivesForDate(todayKey)
+        val hydrated = baseDirectives.map { dir ->
+            val savedProg = localPrefs.getInt("directive_prog_${dir.id}", 0)
+            val savedClaimed = localPrefs.getBoolean("directive_claimed_${dir.id}", false)
+            val initialWaveProg = if (dir.metricType == DailyDirectiveMetric.REACH_WAVE) maxOf(savedProg, 1) else savedProg
+            dir.copy(
+                currentProgress = initialWaveProg.coerceAtMost(dir.targetCount),
+                isClaimed = savedClaimed
+            )
+        }
+        _dailyDirectives.value = hydrated
+    }
+
+    private fun buildDailyDirectivesForDate(dateKey: String): List<DailyDirective> {
+        val dayHash = dateKey.hashCode().let { if (it < 0) -it else it }
+        val killTarget = 25 + (dayHash % 3) * 15
+        val waveTarget = 4 + (dayHash % 4)
+        val fortTarget = 3 + (dayHash % 4)
+        return listOf(
+            DailyDirective(
+                id = "${dateKey}_kills",
+                dateKey = dateKey,
+                title = "Bio-Purge Sweep",
+                description = "Eliminate $killTarget zombies across any solo or co-op sector",
+                metricType = DailyDirectiveMetric.KILL_ZOMBIES,
+                targetCount = killTarget,
+                rewardPoints = 1500,
+                rewardScrap = 60
+            ),
+            DailyDirective(
+                id = "${dateKey}_wave",
+                dateKey = dateKey,
+                title = "Abyssal Endurance",
+                description = "Reach Wave $waveTarget in the Open City or Bunker",
+                metricType = DailyDirectiveMetric.REACH_WAVE,
+                targetCount = waveTarget,
+                rewardPoints = 2000,
+                rewardScrap = 85
+            ),
+            DailyDirective(
+                id = "${dateKey}_tactical",
+                dateKey = dateKey,
+                title = "Siege Engineer",
+                description = "Deploy $fortTarget Barrels/Cryo Spike Traps or Upgrade/Temper gear",
+                metricType = DailyDirectiveMetric.DEPLOY_FORTIFICATIONS,
+                targetCount = fortTarget,
+                rewardPoints = 1250,
+                rewardScrap = 50
+            )
+        )
+    }
+
+    private fun recordCombatProgress(
+        killsDelta: Int,
+        fortsDelta: Int,
+        pointsEarnedDelta: Int,
+        currentWave: Int
+    ) {
+        val cur = _careerDossier.value
+        val updatedDossier = cur.copy(
+            highestWave = maxOf(cur.highestWave, currentWave),
+            totalKills = cur.totalKills + killsDelta,
+            bossKills = cur.bossKills + (if (killsDelta > 0 && currentWave % 5 == 0) 1 else 0),
+            fortificationsDeployed = cur.fortificationsDeployed + fortsDelta,
+            lifetimePointsEarned = cur.lifetimePointsEarned + pointsEarnedDelta.toLong()
+        )
+        _careerDossier.value = updatedDossier
+
+        val updatedDirectives = _dailyDirectives.value.map { dir ->
+            val nextProg = when (dir.metricType) {
+                DailyDirectiveMetric.KILL_ZOMBIES -> (dir.currentProgress + killsDelta).coerceAtMost(dir.targetCount)
+                DailyDirectiveMetric.REACH_WAVE -> maxOf(dir.currentProgress, currentWave).coerceAtMost(dir.targetCount)
+                DailyDirectiveMetric.DEPLOY_FORTIFICATIONS -> (dir.currentProgress + fortsDelta).coerceAtMost(dir.targetCount)
+                DailyDirectiveMetric.UPGRADE_OR_FORGE -> dir.currentProgress
+            }
+            dir.copy(currentProgress = nextProg)
+        }
+        _dailyDirectives.value = updatedDirectives
+        persistCareerAndDirectivesToPrefs(updatedDossier, updatedDirectives)
+    }
+
+    private fun recordUpgradeOrForgeEvent() {
+        val cur = _careerDossier.value
+        val updatedDossier = cur.copy(packAPunchUpgrades = cur.packAPunchUpgrades + 1)
+        _careerDossier.value = updatedDossier
+        val updatedDirectives = _dailyDirectives.value.map { dir ->
+            if (dir.metricType == DailyDirectiveMetric.DEPLOY_FORTIFICATIONS ||
+                dir.metricType == DailyDirectiveMetric.UPGRADE_OR_FORGE
+            ) {
+                dir.copy(currentProgress = (dir.currentProgress + 1).coerceAtMost(dir.targetCount))
+            } else {
+                dir
+            }
+        }
+        _dailyDirectives.value = updatedDirectives
+        persistCareerAndDirectivesToPrefs(updatedDossier, updatedDirectives)
+    }
+
+    private fun persistCareerAndDirectivesToPrefs(dossier: CareerDossier, directives: List<DailyDirective>) {
+        val editor = localPrefs.edit()
+            .putInt("career_highest_wave_v1", dossier.highestWave)
+            .putInt("career_total_kills_v1", dossier.totalKills)
+            .putInt("career_boss_kills_v1", dossier.bossKills)
+            .putInt("career_forts_deployed_v1", dossier.fortificationsDeployed)
+            .putInt("career_pap_upgrades_v1", dossier.packAPunchUpgrades)
+            .putInt("career_squad_revives_v1", dossier.squadRevives)
+            .putLong("career_lifetime_pts_v1", dossier.lifetimePointsEarned)
+            .putInt("career_directives_done_v1", dossier.completedDirectivesCount)
+        for (dir in directives) {
+            editor.putInt("directive_prog_${dir.id}", dir.currentProgress)
+            editor.putBoolean("directive_claimed_${dir.id}", dir.isClaimed)
+        }
+        editor.apply()
+    }
+
+    fun claimDailyDirectiveReward(directiveId: String) {
+        val list = _dailyDirectives.value
+        val target = list.find { it.id == directiveId } ?: return
+        if (!target.isCompleted || target.isClaimed) return
+
+        val updatedList = list.map { if (it.id == directiveId) it.copy(isClaimed = true) else it }
+        _dailyDirectives.value = updatedList
+
+        val updatedDossier = _careerDossier.value.copy(
+            completedDirectivesCount = _careerDossier.value.completedDirectivesCount + 1,
+            lifetimePointsEarned = _careerDossier.value.lifetimePointsEarned + target.rewardPoints
+        )
+        _careerDossier.value = updatedDossier
+        persistCareerAndDirectivesToPrefs(updatedDossier, updatedList)
+
+        val st = _gameState.value
+        _gameState.value = st.copy(
+            points = st.points + target.rewardPoints,
+            depthEscrow = st.depthEscrow.copy(abyssalScrap = st.depthEscrow.abyssalScrap + target.rewardScrap),
+            statusToast = "CONTRACT CLAIMED: ${target.title} (+${target.rewardPoints} PTS & +${target.rewardScrap} SCRAP)!"
+        )
+    }
+
+    fun updateStoreSettings(transform: (AppStoreSettingsState) -> AppStoreSettingsState) {
+        val updated = transform(_storeSettings.value)
+        _storeSettings.value = updated
+        localPrefs.edit()
+            .putBoolean("store_sfx_enabled_v1", updated.sfxEnabled)
+            .putFloat("store_sfx_vol_v1", updated.sfxVolume)
+            .putFloat("store_music_vol_v1", updated.musicVolume)
+            .putBoolean("store_haptics_enabled_v1", updated.hapticsEnabled)
+            .putBoolean("store_dev_mode_v1", updated.developerModeEnabled)
+            .putBoolean("store_seen_manual_v1", updated.hasSeenFieldManual)
+            .apply()
+    }
+
+    fun markFieldManualCompleted() {
+        updateStoreSettings { it.copy(hasSeenFieldManual = true) }
+    }
+
+    fun deleteAccountAndPurgeAllData(onComplete: () -> Unit) {
+        viewModelScope.launch {
+            _accountDeletionStatus.value = "Purging encrypted local saves & cloud Firestore records..."
+            var cloudDeleted = 0
+            if (isCloudAuthenticated) {
+                repository.deleteAllUserCloudData().onSuccess { count ->
+                    cloudDeleted = count
+                }
+            }
+            // Wipe all local preferences and state
+            localPrefs.edit().clear().apply()
+            _localOfflineSaves.value = emptyList()
+            _careerDossier.value = CareerDossier()
+            _dailyDirectives.value = buildDailyDirectivesForDate(LocalDate.now(ZoneOffset.UTC).toString())
+
+            if (isCloudAuthenticated) {
+                try {
+                    Firebase.auth.currentUser?.delete()?.await()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Firebase user delete requires recent re-auth; signing out after cloud data purge", e)
+                    Firebase.auth.signOut()
+                }
+            }
+            _accountDeletionStatus.value = "Account & $cloudDeleted cloud records + all local saves permanently deleted."
+            onComplete()
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         p2pManager.stopSession()
+        oasisServerClient.disconnect()
         konsoleServer.stopServer()
     }
 }

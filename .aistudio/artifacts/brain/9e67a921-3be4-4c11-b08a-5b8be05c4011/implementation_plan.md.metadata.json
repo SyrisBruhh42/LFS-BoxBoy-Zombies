@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for DriveSyncManager managing hierarchically organized JSON game-save envelopes inside the dedicated BoxBoyZombies/Saves Google Drive folder, supporting primary slot updates, rolling backups, timestamped archives, SHA-256 checksum verification, and newest-timestamp-wins conflict resolution with manual restore controls.",
+  "updatedAt":  "2026-11-01T21:18:39.897676333Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -194,6 +194,7 @@ fun AuthScreen(
     val credentialManager = remember { CredentialManager.create(context) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showPrivacyModal by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         attemptAutoSignIn(
@@ -241,7 +242,7 @@ fun AuthScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "MYBOY! SURVIVAL SHELL • 100% OFFLINE & P2P READY",
+                            text = "AETHERIAL CITADEL CHRONICLES • GOOGLE DRIVE & CLOUD SYNC",
                             style = MaterialTheme.typography.labelLarge,
                             color = MysteryGold
                         )
@@ -254,18 +255,18 @@ fun AuthScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Image(
-                            painter = painterResource(id = R.drawable.img_hero_banner),
-                            contentDescription = "BoxBoy Zombies 2D Tactical Survival Banner",
+                            painter = painterResource(id = R.drawable.img_ff_crest_banner_1793566253875),
+                            contentDescription = "BoxBoy Zombies Crystalline Citadel Emblem",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(155.dp)
+                                .height(165.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .border(1.dp, PhosphorGreen.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                                .border(1.dp, MysteryGold.copy(alpha = 0.65f), RoundedCornerShape(12.dp)),
                             contentScale = ContentScale.Crop
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "2D Boxhead & Black Ops Zombies Procedural Survival • Mappable Controls & TV Cast Mode • Dual-Axis Speed Controller • LAN / USB / Bluetooth Sync • Headless Konsole Port :48900",
+                            text = "Crystalline Tactical Action RPG • Google Drive Save & Load Chronicles • 4-Player Astral Co-Op & AI Companions • 7-Slot Relics & Aether Forge",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -287,14 +288,14 @@ fun AuthScreen(
                     FeatureBadge(
                         modifier = Modifier.weight(1f),
                         icon = Icons.Default.WifiTethering,
-                        title = "Easy P2P Link",
-                        subtitle = "Wi-Fi / USB / BT"
+                        title = "4-Player Co-Op",
+                        subtitle = "Cloud / LAN / Bots"
                     )
                     FeatureBadge(
                         modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Terminal,
-                        title = "Konsole :48900",
-                        subtitle = "CLI & Stress Bot"
+                        icon = Icons.Default.Security,
+                        title = "Daily Contracts",
+                        subtitle = "Career & Ranks"
                     )
                 }
 
@@ -392,12 +393,41 @@ fun AuthScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Sign in with Google (Optional Cloud Backup)",
+                            text = "Sign in with Google (Google Drive & Cloud Save Sync)",
                             style = MaterialTheme.typography.titleMedium,
                             color = CryoCyan
                         )
                     }
                 }
+
+                // Play Store Compliance: Privacy Policy & Data Safety Inspector
+                OutlinedButton(
+                    onClick = { showPrivacyModal = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp)
+                        .testTag("auth_privacy_policy_button"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = "Privacy & Data Safety",
+                        tint = PhosphorGreen,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Privacy Policy & Data Safety Inspector (Zero Ad Tracking)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = PhosphorGreen
+                    )
+                }
+            }
+
+            if (showPrivacyModal) {
+                PrivacyAndDataSafetyModal(
+                    onDismiss = { showPrivacyModal = false }
+                )
             }
         }
     }

@@ -36,11 +36,17 @@ import com.example.game.TownBuilding
 import com.example.game.TownBuildingStyle
 import com.example.game.UrbanLandmark
 import com.example.game.UrbanLandmarkKind
+import com.example.game.WorldChunkStreamer
 import com.example.game.WorldFoliage
 import com.example.game.WorldRoadSegment
 import com.example.game.ZombieArchetype
 import com.example.game.ZombieEntity
 import com.example.network.CoopPeerState
+import com.example.ui.BioNoirSpriteAtlasRegistry.drawBioNoirLakeSprite
+import com.example.ui.BioNoirSpriteAtlasRegistry.drawBioNoirRoofOverlay
+import com.example.ui.BioNoirSpriteAtlasRegistry.drawCanopyOverhangSprite
+import com.example.ui.BioNoirSpriteAtlasRegistry.drawOverlappingFoliageSprite
+import com.example.ui.BioNoirSpriteAtlasRegistry.drawSquadMemberOrthographic
 import com.example.ui.theme.CryoCyan
 import com.example.ui.theme.HandheldObsidian
 import com.example.ui.theme.MysteryGold
@@ -89,11 +95,31 @@ object OrthographicWorldRenderer {
         val px = state.playerX
         val py = state.playerY
 
-        // Wide viewport frustum culling bounds in world space for the 3480x2040 Open City Metropolis
+        // Wide viewport frustum culling bounds in world space for the 4800x2760 County Metropolis
         val cullMinX = smoothCamX - 1560f
         val cullMaxX = smoothCamX + 1560f
         val cullMinY = smoothCamY - 1140f
         val cullMaxY = smoothCamY + 1140f
+
+        // P.S. 1 & P.S. 3: Prepare Multi-Threaded RenderGraph Batch from Active 600px Spatial Chunks
+        val activeChunkSnap = if (state.chunkSnapshot.activeChunkCount > 0) {
+            state.chunkSnapshot
+        } else {
+            WorldChunkStreamer.queryAndStreamSquadChunks(
+                map = state.map,
+                playerX = px,
+                playerY = py,
+                coopPeers = state.coopPeers,
+                nowMs = state.clockMs
+            )
+        }
+        val renderGraphFrame = RenderGraphBatcher.prepareRenderGraphFrame(
+            chunkSnapshot = activeChunkSnap,
+            camMinX = cullMinX,
+            camMaxX = cullMaxX,
+            camMinY = cullMinY,
+            camMaxY = cullMaxY
+        )
 
         // 1. Render Orthographic Open City Districts, Biome Roads, Crosswalks & Locked Sector Barriers
         val rooms = state.map.rooms
@@ -329,9 +355,35 @@ object OrthographicWorldRenderer {
             }
         }
 
-        // Draw Co-Op Partner if behind local player
-        if (coopPeer != null && coopPeer.y <= py) {
+        // Draw 4-Player Squad Peers & Legacy Co-Op Partner behind local player (y <= py)
+        val squadPeers = state.coopPeers
+        for (i in 0 until squadPeers.size) {
+            val peer = squadPeers[i]
+            if (peer.y <= py && peer.x in cullMinX..cullMaxX && peer.y in cullMinY..cullMaxY) {
+                drawSquadMemberOrthographic(peer, peer.x, peer.y, scale = 1.05f)
+            }
+        }
+        if (coopPeer != null && coopPeer.y <= py && squadPeers.none { it.peerId == coopPeer.peerId }) {
             drawOrthographicCoopPartner(coopPeer, worldAnimRad)
+        }
+
+        // Draw Local Player Downed/Revive Ring if in Bleedout State
+        if (state.isPlayerDowned) {
+            val ringRad = 28f
+            drawCircle(
+                color = Color(0x55EF4444),
+                radius = ringRad,
+                center = Offset(px, py)
+            )
+            drawArc(
+                color = PhosphorGreen,
+                startAngle = -90f,
+                sweepAngle = 360f * state.playerReviveProgress.coerceIn(0f, 1f),
+                useCenter = false,
+                topLeft = Offset(px - ringRad, py - ringRad),
+                size = Size(ringRad * 2f, ringRad * 2f),
+                style = Stroke(width = 4f)
+            )
         }
 
         // Draw Local Armored Survivor (with 3/4 Orthographic 3D Extrusion, Walking Boots & Articulated Gun)
@@ -341,8 +393,14 @@ object OrthographicWorldRenderer {
             isMoving = isMoving
         )
 
-        // Draw Co-Op Partner if in front of local player
-        if (coopPeer != null && coopPeer.y > py) {
+        // Draw 4-Player Squad Peers & Legacy Co-Op Partner in front of local player (y > py)
+        for (i in 0 until squadPeers.size) {
+            val peer = squadPeers[i]
+            if (peer.y > py && peer.x in cullMinX..cullMaxX && peer.y in cullMinY..cullMaxY) {
+                drawSquadMemberOrthographic(peer, peer.x, peer.y, scale = 1.05f)
+            }
+        }
+        if (coopPeer != null && coopPeer.y > py && squadPeers.none { it.peerId == coopPeer.peerId }) {
             drawOrthographicCoopPartner(coopPeer, worldAnimRad)
         }
 
@@ -513,6 +571,15 @@ object OrthographicWorldRenderer {
                 radius = 4.2f,
                 center = Offset(pt.x, pt.y - 10f)
             )
+        }
+
+        // 7b. Pass 4: Render Translucent Overlapping Bio-Noir Canopy Overhangs over actors walking behind tall trees
+        val overhangs = renderGraphFrame.canopyOverhangNodes
+        for (i in 0 until overhangs.size) {
+            val node = overhangs[i]
+            if (hypot(node.x - px, node.y - py) <= node.radius * 2.4f) {
+                drawCanopyOverhangSprite(node.x, node.y, node.radius)
+            }
         }
 
         // 8. Fast Zero-Allocation Chiaroscuro Lighting & 2-Shadow Pass
@@ -937,9 +1004,12 @@ object OrthographicWorldRenderer {
         val shallowColor = Color(lake.style.shallowColorHex)
         val deepColor = Color(lake.style.deepColorHex)
 
+        // 0. Dark Bio-Noir Overlapping Lake Atlas Stamp (P.S. 2)
+        drawBioNoirLakeSprite(cx, cy, rx, ry)
+
         // 1. Sandy / Pebble Shoreline Beach
         drawOval(
-            color = shoreColor.copy(alpha = 0.82f),
+            color = shoreColor.copy(alpha = 0.65f),
             topLeft = Offset(cx - rx * 1.10f, cy - ry * 1.10f),
             size = Size(rx * 2.20f, ry * 2.20f)
         )
@@ -1115,6 +1185,9 @@ object OrthographicWorldRenderer {
         val canopyBase = Color(fol.primaryColorHex)
         val canopyHi = Color(fol.highlightColorHex)
         val trunkColor = if (fol.kind == FoliageKind.WEEPING_WILLOW_TREE) Color(0xFF4E342E) else Color(0xFF5D4037)
+
+        // 0. Dark Bio-Noir Overlapping Foliage Sprite Atlas Underlay (P.S. 2)
+        drawOverlappingFoliageSprite(fol, x, y, scale = 1.0f, swayX = 0f, isMidLod = false)
 
         // 1. Elliptical Ground Canopy Shadow
         drawOval(
@@ -1606,7 +1679,7 @@ object OrthographicWorldRenderer {
             )
         }
 
-        // 3. Elevated 3D Roof Deck & Pitched Gable Ridge
+        // 3. Elevated 3D Roof Deck & Pitched Gable Ridge + Overlapping Bio-Noir Roof Atlas Overlay (P.S. 2)
         val roofRect = Rect(b.left - 3f, b.top - zH - 2f, b.right + 3f, b.bottom - zH + 2f)
         drawRoundRect(
             color = roofColor,
@@ -1614,6 +1687,7 @@ object OrthographicWorldRenderer {
             size = roofRect.size,
             cornerRadius = CornerRadius(5f, 5f)
         )
+        drawBioNoirRoofOverlay(roofRect.left, roofRect.top, roofRect.width, roofRect.height)
 
         // Pitched Roof Ridge Beam & Shingle Slopes
         val ridgeY = roofRect.center.y - 4f

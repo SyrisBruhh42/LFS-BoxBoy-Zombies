@@ -106,6 +106,217 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "MultiplayerRoom": {
+      "title": "MultiplayerRoom",
+      "description": "Tier-B Cloud Room Relay session keyed by 6-char Crockford Base32 room code (LFS-XXXXXX) for zero-config 4-player internet co-op.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Crockford Base32 room code (e.g. LFS-7K9P2M)."
+        },
+        "hostUserId": {
+          "type": "string",
+          "description": "Authenticated host UID."
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Display callsign of the room host."
+        },
+        "hostMode": {
+          "type": "string",
+          "description": "LFS dual-mode host configuration (LAUNCH_U2_HOSTING_SERVICE or HOST_LOCAL_DEVICE)."
+        },
+        "lifecyclePolicy": {
+          "type": "string",
+          "description": "LFS room lifecycle policy (ON_DEMAND_WAKE, AUTO_CLOSE_IDLE, KEEP_LIVE_PINNED, LEASE_TTL, HARDWARE_SYMPATHETIC_YIELD)."
+        },
+        "hostEpoch": {
+          "type": "integer",
+          "description": "Monotonically increasing Compare-And-Swap epoch fence for live host migration."
+        },
+        "wave": {
+          "type": "integer",
+          "description": "Current survival wave in the room."
+        },
+        "activePlayers": {
+          "type": "integer",
+          "description": "Current active player count (1 to 4)."
+        },
+        "maxPlayers": {
+          "type": "integer",
+          "description": "Maximum allowed squad size (1 to 4)."
+        },
+        "status": {
+          "type": "string",
+          "description": "Room status (OPEN, IN_GAME, MIGRATING, CLOSED)."
+        },
+        "worldSnapshotJson": {
+          "type": "string",
+          "description": "Latest quantized HOST_WORLD_SYNC JSON or BBZ1 encrypted snapshot."
+        },
+        "latestEventJson": {
+          "type": "string",
+          "description": "Latest WORLD_EVENT JSON packet."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the room was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the room was last updated."
+        }
+      },
+      "required": [
+        "roomCode",
+        "hostUserId",
+        "hostName",
+        "hostMode",
+        "lifecyclePolicy",
+        "hostEpoch",
+        "wave",
+        "activePlayers",
+        "maxPlayers",
+        "status",
+        "worldSnapshotJson",
+        "latestEventJson",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RoomPeer": {
+      "title": "RoomPeer",
+      "description": "Real-time 4-player squad peer state inside a MultiplayerRoom.",
+      "type": "object",
+      "properties": {
+        "peerId": {
+          "type": "string",
+          "description": "Unique peer or AI bot ID."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Authenticated user UID publishing this peer (matches request.auth.uid)."
+        },
+        "roomCode": {
+          "type": "string",
+          "description": "Parent room code."
+        },
+        "playerName": {
+          "type": "string",
+          "description": "Squad member callsign."
+        },
+        "x": {
+          "type": "number",
+          "description": "World X coordinate."
+        },
+        "y": {
+          "type": "number",
+          "description": "World Y coordinate."
+        },
+        "vx": {
+          "type": "number",
+          "description": "Velocity X."
+        },
+        "vy": {
+          "type": "number",
+          "description": "Velocity Y."
+        },
+        "aimAngleRad": {
+          "type": "number",
+          "description": "Aim angle in radians."
+        },
+        "hp": {
+          "type": "integer",
+          "description": "Current health points."
+        },
+        "maxHp": {
+          "type": "integer",
+          "description": "Maximum health points."
+        },
+        "shield": {
+          "type": "integer",
+          "description": "Current shield points."
+        },
+        "weaponId": {
+          "type": "string",
+          "description": "Equipped weapon identifier."
+        },
+        "weaponLevel": {
+          "type": "integer",
+          "description": "Pack-a-Punch weapon tier."
+        },
+        "isFiring": {
+          "type": "boolean",
+          "description": "Whether peer is actively firing."
+        },
+        "isDowned": {
+          "type": "boolean",
+          "description": "Whether peer is in downed bleedout state."
+        },
+        "reviveProgress": {
+          "type": "number",
+          "description": "Normalized revive progress (0.0 to 1.0)."
+        },
+        "score": {
+          "type": "integer",
+          "description": "Peer survival score."
+        },
+        "wave": {
+          "type": "integer",
+          "description": "Current wave observed by peer."
+        },
+        "isAiBot": {
+          "type": "boolean",
+          "description": "Whether this squad slot is driven by an Oasis AI Bot (@willow, @cinder, @mote)."
+        },
+        "botPersonaId": {
+          "type": "string",
+          "description": "Bot persona ID if AI bot."
+        },
+        "visorColorHex": {
+          "type": "integer",
+          "description": "ARGB visor tint."
+        },
+        "radioCalloutText": {
+          "type": "string",
+          "description": "Latest tactical radio callout."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the peer state update."
+        }
+      },
+      "required": [
+        "peerId",
+        "userId",
+        "roomCode",
+        "playerName",
+        "x",
+        "y",
+        "vx",
+        "vy",
+        "aimAngleRad",
+        "hp",
+        "maxHp",
+        "shield",
+        "weaponId",
+        "weaponLevel",
+        "isFiring",
+        "isDowned",
+        "reviveProgress",
+        "score",
+        "wave",
+        "isAiBot",
+        "botPersonaId",
+        "visorColorHex",
+        "radioCalloutText",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -120,6 +331,18 @@
         "$ref": "#/entities/ControllerProfile"
       },
       "description": "Per-user MyBoy-style custom controller mappings and touch overlay presets."
+    },
+    "/multiplayer_rooms/{roomCode}": {
+      "schema": {
+        "$ref": "#/entities/MultiplayerRoom"
+      },
+      "description": "Tier-B Cloud Room Relay documents keyed by LFS-XXXXXX room code."
+    },
+    "/multiplayer_rooms/{roomCode}/peers/{peerId}": {
+      "schema": {
+        "$ref": "#/entities/RoomPeer"
+      },
+      "description": "Real-time 4-player squad member states inside a Cloud MultiplayerRoom."
     }
   }
 }

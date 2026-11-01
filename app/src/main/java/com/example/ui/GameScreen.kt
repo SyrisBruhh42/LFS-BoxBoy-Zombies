@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -35,11 +36,15 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MilitaryTech
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Terminal
@@ -97,10 +102,20 @@ import com.example.input.GamepadActionCallbacks
 import com.example.input.GamepadMapping
 import com.example.input.TouchButtonId
 import com.example.network.CoopPeerState
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import com.example.game.ZombieArchetype
 import com.example.ui.theme.CryoCyan
 import com.example.ui.theme.HandheldChassis
 import com.example.ui.theme.HandheldObsidian
 import com.example.ui.theme.HandheldSurfaceVariant
+import com.example.ui.theme.HighContrastBlack
+import com.example.ui.theme.HighContrastCyan
+import com.example.ui.theme.HighContrastWhite
+import com.example.ui.theme.HighContrastYellow
+import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.MysteryGold
 import com.example.ui.theme.PackPurple
 import com.example.ui.theme.PhosphorGreen
@@ -119,6 +134,9 @@ import androidx.compose.material.icons.filled.MusicOff
 import androidx.compose.runtime.LongState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import com.example.audio.CombatAudioEngine
+import com.example.audio.CombatSfxEvent
+import com.example.audio.RememberCombatAudioEngineEffect
 import com.example.audio.RememberRetroMusicTrackEffect
 import com.example.game.ConvexShadowHull
 import com.example.game.PointLightSource2D
@@ -169,11 +187,19 @@ fun GameScreen(
     val cloudProfilesState by viewModel.cloudControllerProfiles.collectAsStateWithLifecycle()
     val p2pStatus by viewModel.p2pManager.sessionStatus.collectAsStateWithLifecycle()
     val coopPeer by viewModel.p2pManager.coopPeerState.collectAsStateWithLifecycle()
+    val oasisStatus by viewModel.oasisStatus.collectAsStateWithLifecycle()
+    val oasisEndpointConfig by viewModel.oasisEndpointConfig.collectAsStateWithLifecycle()
+    val networkHealth by viewModel.networkHealth.collectAsStateWithLifecycle()
     val syncPassphrase by viewModel.syncPassphrase.collectAsStateWithLifecycle()
     val exportedCapsule by viewModel.exportedCapsule.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val preferOfflineAiEngine by viewModel.preferOfflineAiEngine.collectAsStateWithLifecycle()
     val konsoleLog by viewModel.konsoleServer.konsoleLog.collectAsStateWithLifecycle()
+    val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
+    val careerDossier by viewModel.careerDossier.collectAsStateWithLifecycle()
+    val dailyDirectives by viewModel.dailyDirectives.collectAsStateWithLifecycle()
+    val accountDeletionStatus by viewModel.accountDeletionStatus.collectAsStateWithLifecycle()
+    val driveSyncState by viewModel.driveSyncState.collectAsStateWithLifecycle()
 
     var activeSheet by remember { mutableStateOf(ActiveEmulatorSheet.NONE) }
     var isWorldMapModalOpen by remember { mutableStateOf(false) }
@@ -287,7 +313,9 @@ fun GameScreen(
                 latest.selectedFortificationType != prevHud.selectedFortificationType ||
                 latest.aiBotEnabled != prevHud.aiBotEnabled ||
                 latest.speedConfig != prevHud.speedConfig ||
-                latest.mazeState.activeRoomSector != prevHud.mazeState.activeRoomSector
+                latest.mazeState.activeRoomSector != prevHud.mazeState.activeRoomSector ||
+                latest.isPlayerDowned != prevHud.isPlayerDowned ||
+                latest.coopPeers.size != prevHud.coopPeers.size
 
             // Low-frequency counter sync (480ms throttle) so active movement/shooting stays 100% hitch-free
             val counterHudChange = latest.points != prevHud.points ||
@@ -314,16 +342,39 @@ fun GameScreen(
         emulatorSpeed = gameState.speedConfig.clockMultiplier
     )
 
+    // Weapon-stat-scaled procedural PCM AudioTrack CombatAudioEngine + Hit-Reg Haptics
+    val sfxEngine: CombatAudioEngine = RememberCombatAudioEngineEffect(
+        gameState = gameState,
+        sfxEnabled = storeSettings.sfxEnabled,
+        sfxVolume = storeSettings.sfxVolume,
+        hapticsEnabled = storeSettings.hapticsEnabled
+    )
+
+    BackHandler(enabled = activeSheet != ActiveEmulatorSheet.NONE || isWorldMapModalOpen) {
+        if (isWorldMapModalOpen) {
+            isWorldMapModalOpen = false
+        } else {
+            activeSheet = ActiveEmulatorSheet.NONE
+        }
+    }
+
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    MyApplicationTheme(accessibilityState = controllerConfig.toAccessibilityThemeState()) {
     Scaffold(
-        containerColor = HandheldObsidian,
+        containerColor = if (controllerConfig.highContrastMode) HighContrastBlack else HandheldObsidian,
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(focusRequester)
             .focusable()
+            .semantics {
+                if (controllerConfig.screenReaderAnnouncements) {
+                    liveRegion = LiveRegionMode.Polite
+                    contentDescription = "Wave ${gameState.wave}, Health ${gameState.hp} of ${gameState.maxHp}, Points ${gameState.points}, Active Zombies ${gameState.zombies.size}"
+                }
+            }
             .onKeyEvent { event ->
                 val nativeCode = event.nativeKeyEvent.keyCode
                 if (activeSheet == ActiveEmulatorSheet.CONTROLLER_MAPPER &&
@@ -357,17 +408,34 @@ fun GameScreen(
                 // Sleek Compact Top Toolbar (adapts to Landscape & Portrait, with [ROTATE] & [WASD/PAD] toggles)
                 EmulatorTopRomBar(
                     gameState = gameState,
-                    p2pConnected = p2pStatus.isConnected,
+                    p2pConnected = p2pStatus.isConnected || oasisStatus.isConnected,
                     isCloudAuthenticated = viewModel.isCloudAuthenticated,
                     isMusicMuted = isMusicMuted,
                     isHudDrawerExpanded = isHudDrawerExpanded,
                     isTouchPadVisible = isTouchPadVisible && !isTvCastMode,
                     isLandscape = isLandscape,
                     displayMode = controllerConfig.displayMode,
-                    onToggleMusic = { isMusicMuted = !isMusicMuted },
-                    onToggleHudDrawer = { isHudDrawerExpanded = !isHudDrawerExpanded },
-                    onToggleTouchPad = { isTouchPadVisible = !isTouchPadVisible },
+                    highContrastMode = controllerConfig.highContrastMode,
+                    developerModeEnabled = storeSettings.developerModeEnabled,
+                    readyDirectivesCount = dailyDirectives.count { it.isCompleted && !it.isClaimed },
+                    onToggleHighContrast = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.toggleHighContrastMode()
+                    },
+                    onToggleMusic = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        isMusicMuted = !isMusicMuted
+                    },
+                    onToggleHudDrawer = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        isHudDrawerExpanded = !isHudDrawerExpanded
+                    },
+                    onToggleTouchPad = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        isTouchPadVisible = !isTouchPadVisible
+                    },
                     onToggleOrientation = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
                         val activity = context as? Activity
                         if (activity != null) {
                             activity.requestedOrientation = if (isLandscape) {
@@ -377,9 +445,16 @@ fun GameScreen(
                             }
                         }
                     },
-                    onTogglePause = { viewModel.setPaused(!gameState.isPaused) },
-                    onCycleSpeed = { viewModel.cycleEmulatorSpeed() },
+                    onTogglePause = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.setPaused(!gameState.isPaused)
+                    },
+                    onCycleSpeed = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        viewModel.cycleEmulatorSpeed()
+                    },
                     onToggleTvCastMode = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
                         val nextMode = if (controllerConfig.displayMode == DisplayScreenMode.TV_CAST_CINEMATIC) {
                             DisplayScreenMode.HANDHELD_TOUCH
                         } else {
@@ -387,8 +462,14 @@ fun GameScreen(
                         }
                         viewModel.updateControllerConfig { it.copy(displayMode = nextMode) }
                     },
-                    onOpenWorldMap = { isWorldMapModalOpen = true },
-                    onOpenSheet = { activeSheet = it },
+                    onOpenWorldMap = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        isWorldMapModalOpen = true
+                    },
+                    onOpenSheet = {
+                        sfxEngine.trigger(CombatSfxEvent.UI_CLICK)
+                        activeSheet = it
+                    },
                     onSignOut = onSignOutRequested
                 )
 
@@ -457,7 +538,9 @@ fun GameScreen(
                         customWaypoint = customWaypoint,
                         isLandscape = isLandscape,
                         cameraZoomPercent = controllerConfig.cameraZoomPercent,
-                        crtScanlines = controllerConfig.crtScanlinesEnabled,
+                        crtScanlines = controllerConfig.crtScanlinesEnabled && !controllerConfig.reduceMotionAndFlashes && !controllerConfig.highContrastMode,
+                        highContrastMode = controllerConfig.highContrastMode,
+                        colorblindHazardMarkers = controllerConfig.colorblindHazardMarkers,
                         isTouchPadVisible = isTouchPadVisible && !isTvCastMode,
                         onOpenWorldMap = { isWorldMapModalOpen = true },
                         onTriggerReload = { viewModel.triggerManualReload() },
@@ -521,9 +604,16 @@ fun GameScreen(
                 isCloudAuthenticated = viewModel.isCloudAuthenticated,
                 offlineSlots = offlineSaves,
                 cloudState = cloudSavesState,
-                onSaveNewSlot = { slotTitle -> viewModel.saveStateOfflineAndCloud(slotTitle) },
+                driveSyncState = driveSyncState,
+                onSaveNewSlot = { slotTitle -> viewModel.saveStateOfflineAndCloud(slotTitle, context) },
+                onSyncToGoogleDrive = { slotTitle -> viewModel.syncCurrentSaveToGoogleDrive(slotTitle, context) },
+                onRefreshGoogleDrive = { viewModel.refreshGoogleDriveSaves(context) },
+                onReconcileGoogleDrive = { viewModel.reconcileNewestWinsWithGoogleDrive(context) },
+                onSelectDriveRetentionPolicy = { policy -> viewModel.setDriveUploadRetentionPolicy(policy) },
+                onLoadGoogleDriveSlot = { dFile -> viewModel.loadFromGoogleDriveSave(dFile, context) },
+                onDeleteGoogleDriveSlot = { fileId -> viewModel.deleteGoogleDriveSave(context, fileId) },
                 onLoadOfflineSlot = { snap ->
-                    viewModel.applySnapshotToGame(snap, "Local Offline Slot '${snap.slotName}'")
+                    viewModel.applySnapshotToGame(snap, "Local Chronicle '${snap.slotName}'")
                 },
                 onLoadCloudSlot = { slot ->
                     viewModel.loadFromCloudSaveSlot(slot)
@@ -576,7 +666,22 @@ fun GameScreen(
                 onPushSaveSocket = { viewModel.pushCurrentSaveOverP2pSocket() },
                 onExportCapsule = { viewModel.exportCurrentEncryptedCapsule() },
                 onImportCapsule = { cipher -> viewModel.importEncryptedCapsule(cipher) },
-                onDismiss = { activeSheet = ActiveEmulatorSheet.NONE }
+                onDismiss = { activeSheet = ActiveEmulatorSheet.NONE },
+                oasisStatus = oasisStatus,
+                oasisEndpointConfig = oasisEndpointConfig,
+                coopPeers = gameState.coopPeers,
+                networkHealth = networkHealth,
+                onRefreshNetworkHealth = { viewModel.refreshNetworkHealth() },
+                onSetPrivateNetworkOverride = { enabled -> viewModel.setManualPrivateNetworkOverride(enabled) },
+                onUpdateCustomServerUrl = { url -> viewModel.updateCustomLfsServerUrl(url) },
+                onLaunchOrJoinLfsRoom = { code, hostMode, policy ->
+                    viewModel.launchOrJoinLfsHostedRoom(code, hostMode, policy)
+                },
+                onMigrateHostMode = { nextMode -> viewModel.migrateActiveRoomHostMode(nextMode) },
+                onRefreshPublicRooms = { viewModel.refreshPublicLfsRooms() },
+                onDisconnectLfsRoom = { viewModel.disconnectLfsRoom() },
+                onToggleSquadBot = { persona -> viewModel.toggleSquadBotPersona(persona) },
+                onFillSquadWithBots = { viewModel.fillSquadWithOasisBots() }
             )
         }
 
@@ -627,6 +732,93 @@ fun GameScreen(
             )
         }
 
+        ActiveEmulatorSheet.TITLE_HUB -> {
+            TitleHub(
+                gameState = gameState,
+                careerDossier = careerDossier,
+                dailyDirectives = dailyDirectives,
+                driveSyncState = driveSyncState,
+                networkHealth = networkHealth,
+                isCloudAuthenticated = viewModel.isCloudAuthenticated,
+                developerModeEnabled = storeSettings.developerModeEnabled,
+                onStartSurvival = {
+                    sfxEngine.playUiCrystalChime()
+                    viewModel.setPaused(false)
+                    activeSheet = ActiveEmulatorSheet.NONE
+                },
+                onNewAstralSeed = {
+                    sfxEngine.playCrystallineFanfare(isWaveClear = true)
+                    viewModel.resetOrGenerateNewMap()
+                    viewModel.setPaused(false)
+                    activeSheet = ActiveEmulatorSheet.NONE
+                },
+                onQuickSyncToGoogleDrive = {
+                    sfxEngine.playCrystallineFanfare(isWaveClear = false)
+                    viewModel.syncCurrentSaveToGoogleDrive(
+                        slotName = "Chronicle - Wave ${gameState.wave} (${gameState.currentWeapon.shortCode})",
+                        context = context
+                    )
+                },
+                onOpenSaveAndDriveModal = { activeSheet = ActiveEmulatorSheet.SAVE_SLOTS },
+                onOpenCareerDossier = { activeSheet = ActiveEmulatorSheet.CAREER_DOSSIER },
+                onOpenCoopLobby = { activeSheet = ActiveEmulatorSheet.P2P_MULTIPLAYER_SYNC },
+                onOpenArmory = { activeSheet = ActiveEmulatorSheet.WEAPON_ARMORY },
+                onOpenFieldManual = { activeSheet = ActiveEmulatorSheet.FIELD_MANUAL },
+                onOpenSettingsPrivacy = { activeSheet = ActiveEmulatorSheet.STORE_SETTINGS_PRIVACY },
+                onToggleDeveloperTools = { enabled ->
+                    sfxEngine.playUiCrystalChime()
+                    viewModel.updateStoreSettings { it.copy(developerModeEnabled = enabled) }
+                },
+                onToggleAiStressBot = { viewModel.toggleAiBot() },
+                onOpenKonsoleDebugger = { activeSheet = ActiveEmulatorSheet.KONSOLE_DEBUGGER }
+            )
+        }
+
+        ActiveEmulatorSheet.CAREER_DOSSIER -> {
+            CareerDossierAndDirectivesDialog(
+                careerDossier = careerDossier,
+                dailyDirectives = dailyDirectives,
+                onClaimDirective = { id ->
+                    sfxEngine.trigger(CombatSfxEvent.PACK_A_PUNCH_UPGRADE)
+                    viewModel.claimDailyDirectiveReward(id)
+                },
+                onDismiss = { activeSheet = ActiveEmulatorSheet.NONE }
+            )
+        }
+
+        ActiveEmulatorSheet.FIELD_MANUAL -> {
+            InteractiveFieldManualDialog(
+                onCompleteAndClose = {
+                    viewModel.markFieldManualCompleted()
+                    activeSheet = ActiveEmulatorSheet.NONE
+                }
+            )
+        }
+
+        ActiveEmulatorSheet.STORE_SETTINGS_PRIVACY -> {
+            StoreSettingsPrivacyAndAccountDialog(
+                storeSettings = storeSettings,
+                isMusicMuted = isMusicMuted,
+                highContrastMode = controllerConfig.highContrastMode,
+                isCloudAuthenticated = viewModel.isCloudAuthenticated,
+                currentUserId = viewModel.currentUserId,
+                deletionStatus = accountDeletionStatus,
+                onToggleMusicMute = { isMusicMuted = !isMusicMuted },
+                onUpdateStoreSettings = { transform -> viewModel.updateStoreSettings(transform) },
+                onToggleHighContrast = { viewModel.toggleHighContrastMode() },
+                onTestSfxAndHaptics = { evt -> sfxEngine.trigger(evt) },
+                onOpenKonsoleDebugger = { activeSheet = ActiveEmulatorSheet.KONSOLE_DEBUGGER },
+                onOpenFieldManual = { activeSheet = ActiveEmulatorSheet.FIELD_MANUAL },
+                onDeleteAccountAndData = {
+                    viewModel.deleteAccountAndPurgeAllData {
+                        activeSheet = ActiveEmulatorSheet.NONE
+                        onSignOutRequested()
+                    }
+                },
+                onDismiss = { activeSheet = ActiveEmulatorSheet.NONE }
+            )
+        }
+
         ActiveEmulatorSheet.NONE -> Unit
     }
 
@@ -643,6 +835,7 @@ fun GameScreen(
             onDismiss = { isWorldMapModalOpen = false }
         )
     }
+    }
 }
 
 @Composable
@@ -655,6 +848,10 @@ private fun EmulatorTopRomBar(
     isTouchPadVisible: Boolean,
     isLandscape: Boolean,
     displayMode: DisplayScreenMode,
+    highContrastMode: Boolean = false,
+    developerModeEnabled: Boolean = false,
+    readyDirectivesCount: Int = 0,
+    onToggleHighContrast: () -> Unit = {},
     onToggleMusic: () -> Unit,
     onToggleHudDrawer: () -> Unit,
     onToggleTouchPad: () -> Unit,
@@ -667,10 +864,10 @@ private fun EmulatorTopRomBar(
     onSignOut: () -> Unit
 ) {
     Surface(
-        color = HandheldChassis,
+        color = if (highContrastMode) HighContrastBlack else HandheldChassis,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, PhosphorGreen.copy(alpha = 0.45f))
+            .border(if (highContrastMode) 2.dp else 1.dp, if (highContrastMode) HighContrastYellow else PhosphorGreen.copy(alpha = 0.45f))
     ) {
         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = if (isLandscape) 2.dp else 4.dp)) {
             Row(
@@ -828,7 +1025,7 @@ private fun EmulatorTopRomBar(
 
             Spacer(modifier = Modifier.height(3.dp))
 
-            // Second Row: Emulator Menu Strip (WASD/PAD Toggle, HUD Drawer Toggle, Armory, Anvil, Mapper, P2P, Speed, States, Konsole, AI)
+            // Second Row: Consumer Hub, Contracts, Manual, Settings, & Gameplay Strip
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -836,11 +1033,46 @@ private fun EmulatorTopRomBar(
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 EmulatorMenuChip(
+                    icon = Icons.Default.Home,
+                    label = "TITLE HUB",
+                    accent = PhosphorGreen,
+                    tag = "menu_title_hub",
+                    onClick = { onOpenSheet(ActiveEmulatorSheet.TITLE_HUB) }
+                )
+                EmulatorMenuChip(
+                    icon = Icons.Default.MilitaryTech,
+                    label = if (readyDirectivesCount > 0) "CONTRACTS ($readyDirectivesCount!)" else "DOSSIER",
+                    accent = MysteryGold,
+                    tag = "menu_career_dossier",
+                    onClick = { onOpenSheet(ActiveEmulatorSheet.CAREER_DOSSIER) }
+                )
+                EmulatorMenuChip(
+                    icon = Icons.Default.MenuBook,
+                    label = "MANUAL",
+                    accent = CryoCyan,
+                    tag = "menu_field_manual",
+                    onClick = { onOpenSheet(ActiveEmulatorSheet.FIELD_MANUAL) }
+                )
+                EmulatorMenuChip(
+                    icon = Icons.Default.Settings,
+                    label = "SETTINGS",
+                    accent = PhosphorGreen,
+                    tag = "menu_store_settings",
+                    onClick = { onOpenSheet(ActiveEmulatorSheet.STORE_SETTINGS_PRIVACY) }
+                )
+                EmulatorMenuChip(
                     icon = Icons.Default.Gamepad,
                     label = if (isTouchPadVisible) "PAD+WASD" else "WASD ONLY",
                     accent = if (isTouchPadVisible) PhosphorGreen else CryoCyan,
                     tag = "menu_toggle_touchpad",
                     onClick = onToggleTouchPad
+                )
+                EmulatorMenuChip(
+                    icon = Icons.Default.AutoAwesome,
+                    label = if (highContrastMode) "HC: ON (AAA)" else "A11Y / HC",
+                    accent = if (highContrastMode) HighContrastYellow else MysteryGold,
+                    tag = "high_contrast_toggle_button",
+                    onClick = onToggleHighContrast
                 )
                 EmulatorMenuChip(
                     icon = Icons.Default.Refresh,
@@ -912,13 +1144,15 @@ private fun EmulatorTopRomBar(
                     tag = "menu_bgm_toggle",
                     onClick = onToggleMusic
                 )
-                EmulatorMenuChip(
-                    icon = Icons.Default.Terminal,
-                    label = "KONSOLE",
-                    accent = PhosphorGreen,
-                    tag = "menu_konsole_debugger",
-                    onClick = { onOpenSheet(ActiveEmulatorSheet.KONSOLE_DEBUGGER) }
-                )
+                if (developerModeEnabled) {
+                    EmulatorMenuChip(
+                        icon = Icons.Default.Terminal,
+                        label = "KONSOLE",
+                        accent = PhosphorGreen,
+                        tag = "menu_konsole_debugger",
+                        onClick = { onOpenSheet(ActiveEmulatorSheet.KONSOLE_DEBUGGER) }
+                    )
+                }
                 EmulatorMenuChip(
                     icon = Icons.Default.AutoAwesome,
                     label = "AI DIRECTOR",
@@ -1331,6 +1565,8 @@ private fun BoxBoyViewportCanvas(
     isLandscape: Boolean,
     cameraZoomPercent: Int,
     crtScanlines: Boolean,
+    highContrastMode: Boolean = false,
+    colorblindHazardMarkers: Boolean = false,
     isTouchPadVisible: Boolean,
     onOpenWorldMap: () -> Unit,
     onTriggerReload: () -> Unit,
@@ -1353,8 +1589,12 @@ private fun BoxBoyViewportCanvas(
         modifier = Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF0A1114))
-            .border(1.5.dp, PhosphorGreen.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+            .background(if (highContrastMode) HighContrastBlack else Color(0xFF0A1114))
+            .border(
+                width = if (highContrastMode) 2.5.dp else 1.5.dp,
+                color = if (highContrastMode) HighContrastYellow else PhosphorGreen.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(10.dp)
+            )
     ) {
         Canvas(
             modifier = Modifier
@@ -1470,6 +1710,83 @@ private fun BoxBoyViewportCanvas(
                         frameLights = tracker.cachedLights,
                         shadowHulls = tracker.cachedHulls
                     )
+                }
+
+                // High Contrast WCAG AAA & Colorblind Geometric Hazard Overlay Pass
+                if (highContrastMode || colorblindHazardMarkers) {
+                    // Player high-visibility beacon ring + aim laser
+                    drawCircle(
+                        color = HighContrastYellow,
+                        radius = 32f,
+                        center = Offset(liveState.playerX, liveState.playerY),
+                        style = Stroke(width = 4f)
+                    )
+                    val aimLen = 220f
+                    drawLine(
+                        color = HighContrastCyan,
+                        start = Offset(liveState.playerX, liveState.playerY),
+                        end = Offset(
+                            liveState.playerX + cos(liveState.aimAngleRad) * aimLen,
+                            liveState.playerY + sin(liveState.aimAngleRad) * aimLen
+                        ),
+                        strokeWidth = 3.2f
+                    )
+
+                    // Squad Co-Op Peers high-visibility rings
+                    liveState.coopPeers.forEach { sqPeer ->
+                        drawCircle(
+                            color = HighContrastCyan,
+                            radius = 28f,
+                            center = Offset(sqPeer.x, sqPeer.y),
+                            style = Stroke(width = 3.5f)
+                        )
+                    }
+
+                    // Zombies high-contrast outlines + geometric colorblind symbols
+                    liveState.zombies.forEach { z ->
+                        val zx = z.x
+                        val zy = z.y
+                        if (highContrastMode) {
+                            drawCircle(
+                                color = HighContrastWhite,
+                                radius = z.archetype.radius + 6f,
+                                center = Offset(zx, zy),
+                                style = Stroke(width = 3f)
+                            )
+                        }
+                        if (colorblindHazardMarkers) {
+                            val badgeY = zy - z.archetype.radius - 16f
+                            when (z.archetype) {
+                                ZombieArchetype.CALCIFIED_STALKER -> {
+                                    // Triangle ▲ for ranged Stalker
+                                    drawLine(HighContrastYellow, Offset(zx, badgeY - 8f), Offset(zx - 8f, badgeY + 6f), 3f)
+                                    drawLine(HighContrastYellow, Offset(zx - 8f, badgeY + 6f), Offset(zx + 8f, badgeY + 6f), 3f)
+                                    drawLine(HighContrastYellow, Offset(zx + 8f, badgeY + 6f), Offset(zx, badgeY - 8f), 3f)
+                                }
+                                ZombieArchetype.ABYSSAL_WEAVER -> {
+                                    // Diamond ◆ for mage Weaver
+                                    drawLine(HighContrastCyan, Offset(zx, badgeY - 9f), Offset(zx - 9f, badgeY), 3f)
+                                    drawLine(HighContrastCyan, Offset(zx - 9f, badgeY), Offset(zx, badgeY + 9f), 3f)
+                                    drawLine(HighContrastCyan, Offset(zx, badgeY + 9f), Offset(zx + 9f, badgeY), 3f)
+                                    drawLine(HighContrastCyan, Offset(zx + 9f, badgeY), Offset(zx, badgeY - 9f), 3f)
+                                }
+                                ZombieArchetype.DEVIL_BOSS -> {
+                                    // Double Ring ⬡ for Boss
+                                    drawCircle(HighContrastYellow, radius = 11f, center = Offset(zx, badgeY), style = Stroke(width = 3.5f))
+                                    drawCircle(HighContrastWhite, radius = 5f, center = Offset(zx, badgeY))
+                                }
+                                else -> {
+                                    // Crisp Square ■ for melee Shamblers/Runners/Brutes
+                                    drawRect(
+                                        color = HighContrastWhite,
+                                        topLeft = Offset(zx - 6f, badgeY - 6f),
+                                        size = Size(12f, 12f),
+                                        style = Stroke(width = 2.5f)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
