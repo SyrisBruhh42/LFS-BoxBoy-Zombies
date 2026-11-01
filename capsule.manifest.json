@@ -1,0 +1,66 @@
+{
+  "schema_version": "cp12",
+  "project_id": "lfs-boxboy-zombies",
+  "capsule_id": "lfs-boxboy-zombies",
+  "abac_action_id": "capsule.adopted.lfs-boxboy-zombies.launch",
+  "iframe_sandbox": "allow-scripts allow-pointer-lock",
+  "title": "LFS: BoxBoy Zombies (Bio-Noir Survival)",
+  "version": "2.0.0",
+  "lds_theme_pack_support": [
+    "evergreen-dark",
+    "evergreen-light",
+    "high-contrast",
+    "calm",
+    "bio-noir",
+    "phosphor-amber",
+    "cryo-cyan"
+  ],
+  "mod_tunables": [
+    {
+      "key": "clockMultiplier",
+      "type": "float",
+      "min": 0.5,
+      "max": 2.5,
+      "default": 1.0,
+      "description": "Global simulation clock speed multiplier"
+    },
+    {
+      "key": "playerMoveMultiplier",
+      "type": "float",
+      "min": 0.5,
+      "max": 2.0,
+      "default": 1.0,
+      "description": "Player movement velocity multiplier"
+    },
+    {
+      "key": "zombieSpeedMultiplier",
+      "type": "float",
+      "min": 0.4,
+      "max": 2.0,
+      "default": 1.0,
+      "description": "Zombie horde sprint speed multiplier"
+    },
+    {
+      "key": "fireReloadMultiplier",
+      "type": "float",
+      "min": 0.5,
+      "max": 2.5,
+      "default": 1.0,
+      "description": "Weapon fire rate and tactical reload multiplier"
+    }
+  ],
+  "save_custody": {
+    "envelope_schema": "aegisEnvelopeV1",
+    "magic_header": "LFS_AEGIS_SAVE_V1",
+    "max_slots": 20,
+    "shared_relic_bridge": "lfs-local-abac-v1"
+  },
+  "network_mesh": {
+    "tailnet_id": "TNoZe9MmWS11CNTRL",
+    "tailnet_domain": "tail420c4d.ts.net",
+    "anchor_host": "https://lfs-prod.tail420c4d.ts.net",
+    "anchor_sso_url": "http://100.106.12.104:13379/lfs-sso",
+    "laputa_hoster_url": "http://100.115.219.120:19448",
+    "sovereign_web_host": "https://play.lewisfamilysystems.com"
+  }
+}

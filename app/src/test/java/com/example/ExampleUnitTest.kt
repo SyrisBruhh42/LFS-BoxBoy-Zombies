@@ -371,7 +371,117 @@ class ExampleUnitTest {
         val tamperedEnvelope = com.example.data.DriveSyncManager.parseAndVerifyEnvelopeJson(tamperedJson).getOrThrow()
         assertTrue("Tampered envelope must fail SHA-256 verification", !tamperedEnvelope.checksumVerified)
     }
+
+    @Test
+    fun phase10_aegisCp12TailscaleMathTrashArcadeAndSixGateEnvelope_worksCorrectly() {
+        // 1. Verify Canonical Tailscale Mesh Endpoint Config
+        val cfg = com.example.data.LfsServerEndpointConfig()
+        assertEquals("https://lfs-prod.tail420c4d.ts.net", cfg.tailscaleAnchorHost)
+        assertEquals("http://100.106.12.104:13379/lfs-sso", cfg.tailscaleAnchorSsoUrl)
+        assertEquals("http://100.115.219.120:19448", cfg.tailscaleLaputaHosterUrl)
+        assertEquals("TNoZe9MmWS11CNTRL", cfg.expectedTailnetId)
+        assertEquals("tail420c4d.ts.net", cfg.expectedTailnetDomain)
+
+        // 2. Verify Euclidean Positive Modulo in Z_1440 for overnight curfews (e.g. 22:00 [1320] to 06:00 [360])
+        assertTrue(com.example.network.OasisHostedServerClient.isWithinCurfewZ1440(minuteOfDay = 1380, startMin = 1320, endMin = 360))
+        assertTrue(com.example.network.OasisHostedServerClient.isWithinCurfewZ1440(minuteOfDay = 120, startMin = 1320, endMin = 360))
+        assertTrue(!com.example.network.OasisHostedServerClient.isWithinCurfewZ1440(minuteOfDay = 720, startMin = 1320, endMin = 360))
+        assertTrue(!com.example.network.OasisHostedServerClient.isWithinCurfewZ1440(minuteOfDay = -5, startMin = 1320, endMin = 360))
+        assertTrue(com.example.network.OasisHostedServerClient.isWithinCurfewZ1440(minuteOfDay = 500, startMin = 600, endMin = 600))
+
+        // 3. Verify 32-State FIRST_APPLICABLE_DENY ABAC Lattice Evaluator
+        val permitDecision = com.example.network.OasisHostedServerClient.evaluateAbac32Lattice(
+            explicitDeny = false,
+            trustRing = 3,
+            minRing = 2,
+            vipBypass = false,
+            curfewOk = true,
+            stepUpOk = true
+        )
+        assertTrue(permitDecision.permit)
+        assertTrue(permitDecision.reason.startsWith("PERMIT"))
+
+        val vipDecision = com.example.network.OasisHostedServerClient.evaluateAbac32Lattice(
+            explicitDeny = false,
+            trustRing = 4,
+            minRing = 3,
+            vipBypass = true,
+            curfewOk = false,
+            stepUpOk = false
+        )
+        assertTrue(vipDecision.permit)
+        assertTrue(vipDecision.reason.startsWith("PERMIT"))
+
+        val denyDecision = com.example.network.OasisHostedServerClient.evaluateAbac32Lattice(
+            explicitDeny = true,
+            trustRing = 4,
+            minRing = 1,
+            vipBypass = true,
+            curfewOk = true,
+            stepUpOk = true
+        )
+        assertTrue(!denyDecision.permit)
+        assertTrue(denyDecision.reason.startsWith("FIRST_APPLICABLE_DENY"))
+
+        // 4. Verify Total Lexical Order (ts, replicaId, val) LWW Resolver
+        val recA = com.example.network.LwwRecord(ts = 1000L, replicaId = "node-alpha", value = "wave:10")
+        val recB = com.example.network.LwwRecord(ts = 1000L, replicaId = "node-zeta", value = "wave:09")
+        val recC = com.example.network.LwwRecord(ts = 1000L, replicaId = "node-zeta", value = "wave:12")
+        assertEquals(recB, com.example.network.OasisHostedServerClient.resolveTotalOrderLww(recA, recB))
+        assertEquals(recC, com.example.network.OasisHostedServerClient.resolveTotalOrderLww(recB, recC))
+
+        // 5. Verify TrashArcade CMY Rupee Satchel greedy decomposition (9 denominations, <= 24 static sprites)
+        val decomposed = com.example.network.OasisHostedServerClient.decomposeCmyRupees(1888)
+        assertTrue(decomposed.isNotEmpty())
+        assertEquals(1888, decomposed.sumOf { (denom, count) -> denom * count })
+        assertTrue("Total gem sprites must be capped at <= 24", decomposed.sumOf { it.second } <= 24)
+
+        val hugeDecomposed = com.example.network.OasisHostedServerClient.decomposeCmyRupees(99_999)
+        assertTrue("Huge balance gem sprites must still be capped at <= 24", hugeDecomposed.sumOf { it.second } <= 24)
+        assertEquals("ASTRAL_CHEST_TIER_4", com.example.network.OasisHostedServerClient.computeSatchelTier(99_999))
+
+        // 6. Verify 6-Gate aegisEnvelopeV1 SaveLab Seal & Unseal
+        val snapshot = com.example.data.CryptoSyncEngine.GameSaveSnapshot(
+            slotName = "Slot 01 - Wave 14",
+            highestWave = 14,
+            totalKills = 412,
+            points = 12400,
+            unlockedWeaponIds = listOf("pistol", "raybox"),
+            weaponLevels = mapOf("pistol" to 3, "raybox" to 5),
+            activePerks = listOf("JUGGERNOG", "SPEED_COLA"),
+            unlockedRoomsCount = 6,
+            mapSeed = 42013379L,
+            deviceTag = "Laputa-Node",
+            timestampEpochMs = 1762035000000L
+        )
+        val sealedEnvelope = com.example.data.CryptoSyncEngine.sealSixGateAegisEnvelopeV1(
+            slotKey = "slot_01",
+            snapshot = snapshot,
+            generation = 7,
+            passphrase = "AEGIS-CP12-TEST-KEY"
+        )
+        assertEquals("aegisEnvelopeV1", sealedEnvelope.optString("schema"))
+        assertEquals("AEGISENV", sealedEnvelope.optString("magic"))
+        assertEquals("lfs-boxboy-zombies", sealedEnvelope.optString("capsule_id"))
+        assertEquals("slot_01", sealedEnvelope.optString("slot_key"))
+        assertEquals(7, sealedEnvelope.optInt("generation"))
+        assertEquals(64, sealedEnvelope.optString("payload_sha256").length)
+
+        val unsealed = com.example.data.CryptoSyncEngine.unsealSixGateAegisEnvelopeV1(
+            envelopeJson = sealedEnvelope.toString(),
+            passphrase = "AEGIS-CP12-TEST-KEY"
+        ).getOrThrow()
+        assertEquals("Slot 01 - Wave 14", unsealed.slotName)
+        assertEquals(14, unsealed.highestWave)
+        assertEquals(412, unsealed.totalKills)
+        assertEquals(12400, unsealed.points)
+
+        // Tamper with magic header (G1_MAGIC_HEADER failure)
+        val badMagicJson = sealedEnvelope.toString().replace("AEGISENV", "CORRUPT_HEADER")
+        assertTrue(com.example.data.CryptoSyncEngine.unsealSixGateAegisEnvelopeV1(badMagicJson, "AEGIS-CP12-TEST-KEY").isFailure)
+    }
 }
+
 
 
 

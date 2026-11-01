@@ -242,7 +242,7 @@ fun AuthScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "AETHERIAL CITADEL CHRONICLES • GOOGLE DRIVE & CLOUD SYNC",
+                            text = "AETHERIAL CITADEL CHRONICLES | GOOGLE DRIVE & CLOUD SYNC",
                             style = MaterialTheme.typography.labelLarge,
                             color = MysteryGold
                         )
@@ -266,7 +266,7 @@ fun AuthScreen(
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Crystalline Tactical Action RPG • Google Drive Save & Load Chronicles • 4-Player Astral Co-Op & AI Companions • 7-Slot Relics & Aether Forge",
+                            text = "Crystalline Tactical Action RPG | Google Drive Save & Load Chronicles | 4-Player Astral Co-Op & AI Companions | 7-Slot Relics & Aether Forge",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -325,7 +325,7 @@ fun AuthScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Instant launch • No account required • Local AES-GCM saves & LAN/USB Co-op",
+                            text = "Instant launch | No account required | Local AES-GCM saves & LAN/USB Co-op",
                             style = MaterialTheme.typography.labelSmall,
                             color = HandheldObsidian.copy(alpha = 0.85f)
                         )

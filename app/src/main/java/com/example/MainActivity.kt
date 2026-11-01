@@ -35,8 +35,11 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
+import android.content.Intent
 import android.os.SystemClock
 import android.view.KeyEvent
+import androidx.compose.runtime.LaunchedEffect
+import com.example.data.TrashArcadeLaunchParams
 import com.example.input.ControllerManager
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
@@ -47,6 +50,32 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     awaitClose { removeAuthStateListener(listener) }
 }
 
+internal fun parseTrashArcadeIntent(intent: Intent?): TrashArcadeLaunchParams {
+    if (intent == null) return TrashArcadeLaunchParams()
+    val extras = intent.extras
+    val data = intent.data
+
+    fun readParam(key: String): String? {
+        val fromExtra = extras?.getString(key)?.takeIf { it.isNotBlank() }
+        if (fromExtra != null) return fromExtra
+        return data?.getQueryParameter(key)?.takeIf { it.isNotBlank() }
+    }
+
+    val autostartRaw = extras?.get("oasis_autostart")?.toString()
+        ?: data?.getQueryParameter("oasis_autostart")
+    val autostart = autostartRaw?.equals("true", ignoreCase = true) == true ||
+        autostartRaw == "1"
+
+    return TrashArcadeLaunchParams(
+        oasisRoomCode = readParam("oasis_room_code"),
+        oasisHostMode = readParam("oasis_host_mode"),
+        oasisSubuserId = readParam("oasis_subuser_id"),
+        oasisDisplayName = readParam("oasis_display_name"),
+        oasisLdsTheme = readParam("oasis_lds_theme"),
+        oasisAutostart = autostart
+    )
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,11 +83,13 @@ class MainActivity : ComponentActivity() {
         // STEP 1: Configure App Check with launch intent before any UI or Firebase operations
         configureAppCheck(this, intent)
 
+        val launchParams = parseTrashArcadeIntent(intent)
+
         enableEdgeToEdge()
 
         setContent {
             MyApplicationTheme {
-                AppNavigation()
+                AppNavigation(launchParams = launchParams)
             }
         }
     }
@@ -83,10 +114,15 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
+fun AppNavigation(
+    auth: FirebaseAuth = Firebase.auth,
+    launchParams: TrashArcadeLaunchParams = TrashArcadeLaunchParams()
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     val user = currentUser
-    var isOfflineMode by rememberSaveable { mutableStateOf(false) }
+    var isOfflineMode by rememberSaveable {
+        mutableStateOf(launchParams.oasisAutostart || launchParams.hasDeepLinkOverrides)
+    }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -99,7 +135,7 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
         )
     } else {
         val isCloudAuthenticated = user != null
-        val uid = user?.uid ?: "offline_local_player"
+        val uid = user?.uid ?: launchParams.oasisSubuserId ?: "offline_local_player"
         val viewModel: BoxBoyViewModel = viewModel(
             key = "$uid-$isCloudAuthenticated",
             factory = viewModelFactory {
@@ -119,6 +155,12 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
                 }
             }
         )
+
+        LaunchedEffect(launchParams) {
+            if (launchParams.hasDeepLinkOverrides) {
+                viewModel.applyTrashArcadeLaunchParams(launchParams)
+            }
+        }
 
         GameScreen(
             viewModel = viewModel,

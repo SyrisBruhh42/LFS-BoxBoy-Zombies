@@ -85,7 +85,7 @@ data class P2pSessionStatus(
     val messageHistory: List<P2pNetworkMessage> = emptyList(),
     val packetsSent: Int = 0,
     val packetsReceived: Int = 0,
-    val statusLog: String = "Oasis Ready — Host or Join LFS Server (LFS-XXXXXX), Cloud Relay, or LAN :48899",
+    val statusLog: String = "Oasis Ready -- Host or Join LFS Server (LFS-XXXXXX), Cloud Relay, or LAN :48899",
     val lastSyncedSlotSummary: String = ""
 )
 
@@ -279,7 +279,7 @@ class LocalP2pSocketManager(
             _sessionStatus.value = _sessionStatus.value.copy(
                 isConnected = true,
                 connectedPeerAddress = peerAddr,
-                statusLog = "Connected to P2P Peer ($peerAddr) — Bidirectional Socket Active!"
+                statusLog = "Connected to P2P Peer ($peerAddr) -- Bidirectional Socket Active!"
             )
 
             // Send initial HELLO handshake packet over the Socket

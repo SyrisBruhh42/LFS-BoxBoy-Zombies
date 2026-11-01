@@ -130,22 +130,22 @@ object OfflineTacticalAiEngine {
             state.hp <= 40 ->
                 "CRITICAL VITALS (${state.hp}/${state.maxHp} HP): Break line-of-sight around bunker pillars immediately and prioritize Juggernog (+100 Max HP) or Quick Revive!"
             devils > 0 ->
-                "BOSS ALERT ($devils Boxhead Devil${if (devils > 1) "s" else ""} active, closest ${nearestDist}px): Do not trade hits—lure the Devil past $activeBarrels primed Red Barrels and fire from maximum range with ${wpn.name}!"
+                "BOSS ALERT ($devils Boxhead Devil${if (devils > 1) "s" else ""} active, closest ${nearestDist}px): Do not trade hits--lure the Devil past $activeBarrels primed Red Barrels and fire from maximum range with ${wpn.name}!"
             sprinters >= 4 ->
                 "HIGH-SPEED SWARM ($sprinters Hell Runners closing at ${nearestDist}px): Backpedal through doorway choke points and trigger a tactical reload before your ${wpn.shortCode} magazine (${state.currentAmmoCount}/${state.currentMaxMagSize}) runs dry."
             state.currentAmmoCount <= (state.currentMaxMagSize / 4).coerceAtLeast(2) ->
                 "LOW MAGAZINE WARNING (${state.currentAmmoCount}/${state.currentMaxMagSize} rounds): Hit RELOAD [Y] now while nearest hostile is ${nearestDist}px away (Current Hit Accuracy: ${state.ammoTelemetry.accuracyPercent}%)."
             else ->
-                "SECTOR TELEMETRY STABLE (Wave ${state.wave} • ${state.zombies.size} active hostiles, $crawlers Acid Crawlers, $activeBarrels active barrels in ${state.unlockedRooms.size}/6 unlocked sectors)."
+                "SECTOR TELEMETRY STABLE (Wave ${state.wave} | ${state.zombies.size} active hostiles, $crawlers Acid Crawlers, $activeBarrels active barrels in ${state.unlockedRooms.size}/6 unlocked sectors)."
         }
 
         val economyRecommendation = when {
             state.unlockedRooms.size == 1 && state.points >= 750 ->
-                "You have ${state.points} PTS—move to the East Boundary door and press [B] to unlock Sector 02 East Armory (750 PTS) for wider kiting lanes."
+                "You have ${state.points} PTS--move to the East Boundary door and press [B] to unlock Sector 02 East Armory (750 PTS) for wider kiting lanes."
             PerkType.JUGGERNOG !in state.activePerks && state.points >= 1200 ->
                 "Bank is at ${state.points} PTS: prioritize buying Juggernog Soda (200 Max HP) or unlocking North Cryo Lab (1000 PTS)."
             PerkType.SPEED_COLA !in state.activePerks && state.points >= 1000 && state.ammoTelemetry.reloadsCompleted >= 2 ->
-                "You've completed ${state.ammoTelemetry.reloadsCompleted} reloads—grab Speed Cola (-50% reload time) or Double Tap (+35% fire rate) to boost sustained DPS."
+                "You've completed ${state.ammoTelemetry.reloadsCompleted} reloads--grab Speed Cola (-50% reload time) or Double Tap (+35% fire rate) to boost sustained DPS."
             wpnLvl < 5 && state.points >= upgradeCost ->
                 "You have ${state.points} PTS ready: open the Armory and upgrade your ${wpn.name} to Pack-a-Punch MK-${wpnLvl + 1} ($upgradeCost PTS) for +45% damage & +4 mag capacity!"
             else ->

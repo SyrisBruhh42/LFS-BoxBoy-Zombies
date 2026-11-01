@@ -119,7 +119,7 @@ data class GoogleDriveSyncUiState(
 )
 
 /**
- * `DriveSyncManager` — Handles Google Drive REST API v3 file operations for uploading, listing,
+ * `DriveSyncManager` -- Handles Google Drive REST API v3 file operations for uploading, listing,
  * conflict-reconciling, and downloading JSON game-save envelopes inside the dedicated
  * `BoxBoyZombies/Saves` folder in the user's Google Drive.
  *
@@ -716,9 +716,9 @@ class DriveSyncManager(
             driveFiles = mergedList,
             lastSyncedEpochMs = System.currentTimeMillis(),
             statusMessage = if (remoteSuccess) {
-                "Uploaded to $TARGET_FOLDER_PATH (${newlyWrittenEntries.size} envelope(s) • SHA-256 Verified)"
+                "Uploaded to $TARGET_FOLDER_PATH (${newlyWrittenEntries.size} envelope(s) | SHA-256 Verified)"
             } else {
-                "Saved to $TARGET_FOLDER_PATH Vault (${newlyWrittenEntries.size} envelope(s) • SHA-256 Verified)"
+                "Saved to $TARGET_FOLDER_PATH Vault (${newlyWrittenEntries.size} envelope(s) | SHA-256 Verified)"
             }
         )
         Result.success(primaryOrFirst)
@@ -963,7 +963,7 @@ class DriveSyncManager(
             driveFiles = merged,
             lastSyncedEpochMs = System.currentTimeMillis(),
             statusMessage = if (remoteSuccess) {
-                "Synced $TARGET_FOLDER_PATH (${merged.size} Envelopes • Newest-Wins Active)"
+                "Synced $TARGET_FOLDER_PATH (${merged.size} Envelopes | Newest-Wins Active)"
             } else {
                 "$TARGET_FOLDER_PATH Vault Ready (${merged.size} Envelopes)"
             }

@@ -172,7 +172,7 @@ data class GameSessionState(
     val clockMs: Long = 0L,
     val isPaused: Boolean = false,
     val isGameOver: Boolean = false,
-    val statusToast: String = "OPEN CITY ONLINE — WASD Move • Click/Drag or Arrows to Aim & Fire!"
+    val statusToast: String = "OPEN CITY ONLINE -- WASD Move | Click/Drag or Arrows to Aim & Fire!"
 ) {
     val currentWeapon: WeaponSpec
         get() {
@@ -467,7 +467,7 @@ class BoxBoyGameEngine {
             coneHalfSpreadRad = totalConeSpread
         )
         val lightLockTargetId = if (isIlluminatedLock) lockTarget?.id else null
-        // Gentle front-cone magnetism ONLY when no manual aim override is active and target is within a narrow 22° front arc
+        // Gentle front-cone magnetism ONLY when no manual aim override is active and target is within a narrow 22 deg front arc
         if (aimAngleOverrideRad == null && lockTarget != null && isFiring) {
             val desiredAim = atan2(lockTarget.y - ny, lockTarget.x - nx)
             var diff = desiredAim - aimAngle
@@ -742,7 +742,7 @@ class BoxBoyGameEngine {
                 )
                 points += 850
                 banners.add(FloatingBanner("SIEGE COMPLETE! +LOOT CACHE", nx, ny - 32f, 0xFFFFD166, 1600L))
-                statusToast = "SIEGE FABRICATION COMPLETE — Epic Weapon & Armor Cache Dropped!"
+                statusToast = "SIEGE FABRICATION COMPLETE -- Epic Weapon & Armor Cache Dropped!"
             } else {
                 siegeState = siegeState.copy(remainingMs = remSiege)
             }
@@ -827,7 +827,7 @@ class BoxBoyGameEngine {
                 barrels[i] = barrels[i].copy(isDetonated = false)
             }
             depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 25)
-            statusToast = "WAVE $wave INCOMING — Shield Recharged & +25 Abyssal Scrap!"
+            statusToast = "WAVE $wave INCOMING -- Shield Recharged & +25 Abyssal Scrap!"
             banners.add(FloatingBanner("WAVE $wave!", nx, ny - 30f, 0xFFFFD166, ttlMs = 1500L))
         }
 
@@ -1012,17 +1012,17 @@ class BoxBoyGameEngine {
                 hp = maxHp
                 shield = maxShield
                 zombies.removeIf { hypot(it.x - nx, it.y - ny) < 180f }
-                statusToast = "QUICK REVIVE ACTIVATED — Shockwave cleared nearby undead!"
+                statusToast = "QUICK REVIVE ACTIVATED -- Shockwave cleared nearby undead!"
                 banners.add(FloatingBanner("SELF-REVIVED!", nx, ny - 28f, 0xFF00E5FF, 1500L))
             } else if (squadPeers.any { !it.isDowned && it.hp > 0 } || (coopPeerX != null && coopPeerY != null)) {
                 isPlayerDowned = true
                 playerBleedoutMs = 30_000L
                 playerReviveProg = 0f
-                statusToast = "DOWNED (30s BLEEDOUT) — Teammate within 90px can revive you!"
+                statusToast = "DOWNED (30s BLEEDOUT) -- Teammate within 90px can revive you!"
                 banners.add(FloatingBanner("DOWNED! AWAITING REVIVE", nx, ny - 28f, 0xFFFFD166, 1500L))
             } else {
                 isGameOver = true
-                statusToast = "SURVIVOR DOWN AT WAVE $wave — Tap Replay Seed or Load Save State"
+                statusToast = "SURVIVOR DOWN AT WAVE $wave -- Tap Replay Seed or Load Save State"
             }
         }
 
@@ -1041,7 +1041,7 @@ class BoxBoyGameEngine {
                     shield = 50.coerceAtMost(maxShield)
                     points += 250
                     banners.add(FloatingBanner("+250 CO-OP REVIVE!", nx, ny - 30f, 0xFF00FF66, 1500L))
-                    statusToast = "REVIVED BY SQUADMATE — Restored 100 HP + 50 Shield!"
+                    statusToast = "REVIVED BY SQUADMATE -- Restored 100 HP + 50 Shield!"
                 }
             } else {
                 playerReviveProg = (playerReviveProg - (scaledDeltaMs.toFloat() / 6000f)).coerceAtLeast(0f)
@@ -1050,7 +1050,7 @@ class BoxBoyGameEngine {
             val anyLivingTeammate = squadPeers.any { !it.isDowned && it.hp > 0 } || (coopPeerX != null && coopPeerY != null)
             if (playerBleedoutMs <= 0L || !anyLivingTeammate) {
                 isGameOver = true
-                statusToast = "SQUAD WIPED AT WAVE $wave — Tap Replay Seed or Load Save State"
+                statusToast = "SQUAD WIPED AT WAVE $wave -- Tap Replay Seed or Load Save State"
             }
         }
 
@@ -1207,7 +1207,7 @@ class BoxBoyGameEngine {
                                 remainingMs = 20_000L,
                                 totalDurationMs = 20_000L
                             )
-                            statusToast = "SIEGE FABRICATOR ACTIVATED (20s) — Camera framing widened to 1.1x!"
+                            statusToast = "SIEGE FABRICATOR ACTIVATED (20s) -- Camera framing widened to 1.1x!"
                             banners.add(FloatingBanner("SIEGE STARTED!", nearby.x, nearby.y, 0xFFFF2A54, 1500L))
                         }
                     }
@@ -1360,7 +1360,7 @@ class BoxBoyGameEngine {
                 isAiBot = true,
                 botPersonaId = persona.id,
                 visorColorHex = persona.visorColorHex,
-                radioCalloutText = "${persona.displayName} online — ${persona.roleSummary}!",
+                radioCalloutText = "${persona.displayName} online -- ${persona.roleSummary}!",
                 radioCalloutTtlMs = 3200L,
                 updatedAtMs = System.currentTimeMillis()
             )
@@ -1549,7 +1549,7 @@ class BoxBoyGameEngine {
                     val (bk, bp) = triggerBarrelExplosion(primedBarrel.x, primedBarrel.y, zombies, particles, banners)
                     killsAdded += bk
                     pointsAdded += bp
-                    callout = "BARREL PRIMED — KABOOM! (+$bk)"
+                    callout = "BARREL PRIMED -- KABOOM! (+$bk)"
                     calloutTtl = 2600L
                 }
                 tracers.add(
@@ -1754,7 +1754,7 @@ class BoxBoyGameEngine {
             killsDuringTest = simState.totalKills - startKills
         )
         return simState.copy(
-            statusToast = "STRESS BENCHMARK: $safeTicks ticks in ${"%.1f".format(elapsedMs)}ms (${"%.1f".format(avgMicros)}µs/tick, ~$maxFps FPS cap)"
+            statusToast = "STRESS BENCHMARK: $safeTicks ticks in ${"%.1f".format(elapsedMs)}ms (${"%.1f".format(avgMicros)}us/tick, ~$maxFps FPS cap)"
         ) to report
     }
 

@@ -61,7 +61,7 @@ data class GamepadMapping(
             action == GamepadAction.INTERACT_BUY && hasInteractTarget -> "BUY!"
             else -> action.hudBadge
         }
-        return "${buttonId.shortLabel}•$suffix"
+        return "${buttonId.shortLabel}|$suffix"
     }
 
     fun toSerializedString(): String {
@@ -407,7 +407,7 @@ object ControllerManager {
 
     /**
      * Computes the unified WASD + Touch Virtual Joystick vector and smoothly interpolates
-     * [smoothedJoyX] and [smoothedJoyY] so WASD feels like a responsive 360° analog stick
+     * [smoothedJoyX] and [smoothedJoyY] so WASD feels like a responsive 360 deg analog stick
      * without key-repeat micro-stutters.
      */
     fun stepAndSampleJoystickVector(nowUptimeMs: Long, dtSec: Float): Pair<Float, Float> {

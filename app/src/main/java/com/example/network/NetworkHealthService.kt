@@ -56,7 +56,7 @@ data class NetworkHealthSnapshot(
             isTailscaleActive -> "TAILSCALE PRIVATE MESH ACTIVE (${tailscaleIp ?: activeVpnInterfaces.firstOrNull() ?: "ts0"})"
             isVpnProfileActive -> "PRIVATE VPN PROFILE ACTIVE (${activeVpnInterfaces.joinToString(", ").ifBlank { "TRANSPORT_VPN" }})"
             manualPrivateOverride -> "MANUAL PRIVATE NETWORK OVERRIDE ENABLED (LFS Oasis Card Unlocked)"
-            else -> "PUBLIC / STANDARD LAN ($localLanIp) — No Tailscale or VPN Profile Detected"
+            else -> "PUBLIC / STANDARD LAN ($localLanIp) -- No Tailscale or VPN Profile Detected"
         }
 }
 
@@ -161,7 +161,7 @@ class NetworkHealthService(
         )
 
         /**
-         * Checks if an IPv4 address belongs to the Tailscale CGNAT space (`100.64.0.0/10`, i.e., `100.64.0.0` – `100.127.255.255`).
+         * Checks if an IPv4 address belongs to the Tailscale CGNAT space (`100.64.0.0/10`, i.e., `100.64.0.0` - `100.127.255.255`).
          */
         fun isTailscaleCgnatIpv4(ip: String): Boolean {
             val parts = ip.trim().split('.')

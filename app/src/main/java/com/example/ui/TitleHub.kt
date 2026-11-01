@@ -309,7 +309,7 @@ fun TitleHub(
                                 fontSize = 15.sp
                             )
                             Text(
-                                text = "Wave ${gameState.wave} • ${gameState.points} Gil/PTS • ${gameState.currentWeapon.shortCode}",
+                                text = "Wave ${gameState.wave} | ${gameState.points} Gil/PTS | ${gameState.currentWeapon.shortCode}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AstralObsidian.copy(alpha = 0.85f)
                             )
@@ -461,7 +461,7 @@ fun TitleHub(
                         modifier = Modifier.weight(1f),
                         icon = Icons.Default.AutoAwesome,
                         title = "CELESTIAL ARMORY",
-                        subtitle = "${gameState.unlockedWeaponIds.size}/7 Arms • 7-Slot Armor",
+                        subtitle = "${gameState.unlockedWeaponIds.size}/7 Arms | 7-Slot Armor",
                         accent = MateriaViolet,
                         tag = "title_hub_armory_button",
                         onClick = onOpenArmory
@@ -560,17 +560,17 @@ fun TitleHub(
                             }
                             HorizontalDivider(color = MateriaViolet.copy(alpha = 0.3f))
                             Text(
-                                text = "• Entities: ${gameState.zombies.size} Hostiles | ${gameState.fortifications.size} Fortifications | ${gameState.coopPeers.size} Squad Peers",
+                                text = "| Entities: ${gameState.zombies.size} Hostiles | ${gameState.fortifications.size} Fortifications | ${gameState.coopPeers.size} Squad Peers",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextCrisp
                             )
                             Text(
-                                text = "• Chunk Streamer: ${gameState.chunkSnapshot.activeChunkCount} Active Chunks | Mid-LOD Cached: ${gameState.chunkSnapshot.cachedMidLodCount} / ${gameState.chunkSnapshot.totalChunksInWorld}",
+                                text = "| Chunk Streamer: ${gameState.chunkSnapshot.activeChunkCount} Active Chunks | Mid-LOD Cached: ${gameState.chunkSnapshot.cachedMidLodCount} / ${gameState.chunkSnapshot.totalChunksInWorld}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AetherCyan
                             )
                             Text(
-                                text = "• Network Mesh: ${networkHealth.statusHeadline} | Private/VPN: ${networkHealth.isPrivateNetworkDetected}",
+                                text = "| Network Mesh: ${networkHealth.statusHeadline} | Private/VPN: ${networkHealth.isPrivateNetworkDetected}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted
                             )

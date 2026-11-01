@@ -80,6 +80,7 @@ import com.example.data.LfsServerEndpointConfig
 import com.example.data.OasisBotPersona
 import com.example.data.SaveSlot
 import com.example.data.SyncTransportMode
+import com.example.data.TrashArcadeSharedRelic
 import com.example.game.GameSessionState
 import com.example.game.SpeedConfig
 import com.example.game.ZombieArchetype
@@ -268,7 +269,7 @@ fun SaveSlotsDialog(
     var slotTitle by remember { mutableStateOf("Chronicle - Wave ${gameState.wave} (${gameState.currentWeapon.shortCode})") }
 
     EmulatorModalContainer(
-        title = "ASTRAL CHRONICLES • GOOGLE DRIVE & CLOUD SAVE",
+        title = "ASTRAL CHRONICLES | GOOGLE DRIVE & CLOUD SAVE",
         subtitle = "Sync SHA-256 verified JSON save envelopes to ${DriveSyncManager.TARGET_FOLDER_PATH}",
         onDismiss = onDismiss
     ) {
@@ -316,7 +317,7 @@ fun SaveSlotsDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "GOOGLE DRIVE • ${driveSyncState.targetFolderPath} (${driveSyncState.driveFiles.size})",
+                            text = "GOOGLE DRIVE | ${driveSyncState.targetFolderPath} (${driveSyncState.driveFiles.size})",
                             style = MaterialTheme.typography.titleMedium,
                             color = MysteryGold
                         )
@@ -418,12 +419,12 @@ fun SaveSlotsDialog(
                                         )
                                     }
                                     Text(
-                                        "Wave ${dFile.highestWave} • ${dFile.totalKills} Kills • ${dFile.points} PTS • ${dFile.loadoutSummary}",
+                                        "Wave ${dFile.highestWave} | ${dFile.totalKills} Kills | ${dFile.points} PTS | ${dFile.loadoutSummary}",
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                     val checksumShort = dFile.sha256Checksum.take(8).ifBlank { "verified" }
                                     Text(
-                                        text = "${dFile.folderPath}/${dFile.fileName} • ${dFile.conflictStatus.badgeText} • SHA-256: $checksumShort",
+                                        text = "${dFile.folderPath}/${dFile.fileName} | ${dFile.conflictStatus.badgeText} | SHA-256: $checksumShort",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (dFile.checksumVerified) PhosphorGreen else ZombieCrimson
                                     )
@@ -477,7 +478,7 @@ fun SaveSlotsDialog(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(snap.slotName, style = MaterialTheme.typography.titleMedium, color = PhosphorGreen)
                             Text(
-                                "Wave ${snap.highestWave} • ${snap.totalKills} Kills • ${snap.points} PTS • ${snap.unlockedRoomsCount}/6 Rooms",
+                                "Wave ${snap.highestWave} | ${snap.totalKills} Kills | ${snap.points} PTS | ${snap.unlockedRoomsCount}/6 Rooms",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -561,7 +562,7 @@ fun SaveSlotsDialog(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(slot.slotName, style = MaterialTheme.typography.titleMedium, color = CryoCyan)
                                         Text(
-                                            "Wave ${slot.highestWave} • ${slot.totalKills} Kills • ${slot.points} PTS",
+                                            "Wave ${slot.highestWave} | ${slot.totalKills} Kills | ${slot.points} PTS",
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                         Text(
@@ -631,7 +632,7 @@ fun ControllerMapperDialog(
                     color = PhosphorGreen
                 )
                 Text(
-                    "Active Mapping: ${gamepadMapping.mappingName} • Tap any touch button below to assign a custom gameplay action:",
+                    "Active Mapping: ${gamepadMapping.mappingName} | Tap any touch button below to assign a custom gameplay action:",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -919,7 +920,7 @@ fun ControllerMapperDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Colorblind Geometric Hazard Markers (▲ ◆ ⬡ ✚)", style = MaterialTheme.typography.bodyMedium)
+                    Text("Colorblind Geometric Hazard Markers (\u25B2 \u25C6 \u2B21 \u271A)", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = config.colorblindHazardMarkers,
                         onCheckedChange = { checked ->
@@ -1028,7 +1029,7 @@ fun ControllerMapperDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("${prof.profileName} (Scale ${prof.dpadScale}% • Opacity ${prof.buttonOpacity}%)", modifier = Modifier.weight(1f))
+                    Text("${prof.profileName} (Scale ${prof.dpadScale}% | Opacity ${prof.buttonOpacity}%)", modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = { onApplyCloudProfile(prof) }) {
                         Text("APPLY")
                     }
@@ -1070,7 +1071,10 @@ fun P2pMultiplayerSyncDialog(
     onRefreshPublicRooms: () -> Unit = {},
     onDisconnectLfsRoom: () -> Unit = {},
     onToggleSquadBot: (OasisBotPersona) -> Unit = {},
-    onFillSquadWithBots: () -> Unit = {}
+    onFillSquadWithBots: () -> Unit = {},
+    currentPoints: Int = 500,
+    unlockedTrashArcadeRelics: Set<String> = emptySet(),
+    onProbeTailscaleHandshake: () -> Unit = {}
 ) {
     val clipboard = LocalClipboardManager.current
     var targetHostIp by remember {
@@ -1095,7 +1099,7 @@ fun P2pMultiplayerSyncDialog(
 
     EmulatorModalContainer(
         title = "LFS OASIS HOSTED SERVER & P2P CO-OP COMMAND DECK",
-        subtitle = "play.lewisfamilysystems.com • 3-Tier Failover • 4-Player Squad & AI Bots",
+        subtitle = "play.lewisfamilysystems.com | 3-Tier Failover | 4-Player Squad & AI Bots",
         onDismiss = onDismiss
     ) {
         // NETWORK HEALTH SERVICE: Tailscale & VPN Private Network Probe Card
@@ -1163,6 +1167,112 @@ fun P2pMultiplayerSyncDialog(
             }
         }
 
+        // TRASHARCADE SATCHEL & TAILSCALE 4-PILLAR STATUS (CP-12 / lfs-local-abac-v1)
+        val ssoState = oasisStatus.tailscaleHandshake
+        val rupeeBreakdown = remember(currentPoints) {
+            OasisHostedServerClient.decomposeCmyRupees(currentPoints)
+        }
+        val satchelTier = remember(currentPoints) {
+            OasisHostedServerClient.computeSatchelTier(currentPoints)
+        }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, CryoCyan.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                .testTag("trash_arcade_tailscale_status_card")
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "TRASHARCADE SATCHEL & TAILSCALE 4-PILLAR STATUS",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MysteryGold
+                        )
+                        Text(
+                            text = "ReplicaID: ${ssoState.stableNodeId} | Subuser: ${ssoState.subuserId} (${ssoState.persona}) | Ring ${ssoState.trustRing} | Epoch #${ssoState.generationEpoch}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CryoCyan
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onProbeTailscaleHandshake,
+                        modifier = Modifier.testTag("probe_tailscale_sso_button")
+                    ) {
+                        Text("PROBE ANCHOR SSO")
+                    }
+                }
+
+                // 4 Live Pillar Checks with Machado CVD-Safe [PASS] / [WARN] Badges
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        "tailscale_tunnel" to ssoState.tailscaleTunnelBadge,
+                        "abac_perimeter" to ssoState.abacPerimeterBadge,
+                        "isolated_profile" to ssoState.isolatedProfileBadge,
+                        "user_data_backup" to ssoState.userDataBackupBadge
+                    ).forEach { (pillar, badge) ->
+                        val isPass = badge == "[PASS]"
+                        Text(
+                            text = "$pillar: $badge",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isPass) PhosphorGreen else MysteryGold,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "32-State ABAC Lattice: bits=0x${ssoState.abacDecision.stateBits.toString(16).uppercase()} (${ssoState.abacDecision.reason}) | Endpoint: ${ssoState.lastProbedEndpoint}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (ssoState.abacDecision.permit) PhosphorGreen else ZombieCrimson
+                )
+
+                HorizontalDivider(color = CryoCyan.copy(alpha = 0.25f))
+
+                // CMY Rupee Satchel Breakdown & Tier
+                val rupeeSummary = if (rupeeBreakdown.isEmpty()) {
+                    "0 RUP"
+                } else {
+                    rupeeBreakdown.joinToString(" + ") { (denom, count) -> "${count}x${denom}R" }
+                }
+                val totalSprites = rupeeBreakdown.sumOf { it.second }
+                Text(
+                    text = "CMY RUPEE SATCHEL [$satchelTier]: $currentPoints RUP -> $rupeeSummary ($totalSprites/24 static sprites)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = PhosphorGreen
+                )
+
+                // 4 Cross-Game lfs-local-abac-v1 Relics
+                Text(
+                    text = "CROSS-GAME RELICS (lfs-local-abac-v1):",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MysteryGold
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    TrashArcadeSharedRelic.entries.forEach { relic ->
+                        val isUnlocked = relic.relicId in unlockedTrashArcadeRelics
+                        val badge = if (isUnlocked) "[UNLOCKED]" else "[LOCKED]"
+                        Text(
+                            text = "$badge ${relic.title} (${relic.relicId}) -> ${relic.crossGamePerk}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isUnlocked) PhosphorGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         Text("1. SELECT MULTIPLAYER TRANSPORT TIER", style = MaterialTheme.typography.labelLarge, color = MysteryGold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SyncTransportMode.entries.forEach { mode ->
@@ -1200,7 +1310,7 @@ fun P2pMultiplayerSyncDialog(
                                 color = PhosphorGreen
                             )
                             Text(
-                                "Room: ${oasisStatus.roomCode} • Epoch: ${oasisStatus.hostEpoch} • Tier: ${oasisStatus.transportTier}",
+                                "Room: ${oasisStatus.roomCode} | Epoch: ${oasisStatus.hostEpoch} | Tier: ${oasisStatus.transportTier}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CryoCyan
                             )
@@ -1226,7 +1336,9 @@ fun P2pMultiplayerSyncDialog(
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf(
                             "play.lewisfamilysystems.com" to "",
-                            "sync.lewisfamilysystems.com" to "https://sync.lewisfamilysystems.com",
+                            "lfs-prod.tail420c4d.ts.net" to oasisEndpointConfig.tailscaleAnchorHost,
+                            "Laputa (:19448)" to oasisEndpointConfig.tailscaleLaputaHosterUrl,
+                            "Anchor SSO (:13379)" to oasisEndpointConfig.tailscaleAnchorSsoUrl,
                             "Local Hoster (:19448)" to "http://127.0.0.1:19448"
                         ).forEach { (label, url) ->
                             FilterChip(
@@ -1367,7 +1479,7 @@ fun P2pMultiplayerSyncDialog(
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = CryoCyan, contentColor = HandheldObsidian)
                                 ) {
-                                    Text("JOIN ${room.roomCode} (W${room.wave} • ${room.activePlayers}/${room.maxPlayers})")
+                                    Text("JOIN ${room.roomCode} (W${room.wave} | ${room.activePlayers}/${room.maxPlayers})")
                                 }
                             }
                         }
@@ -1466,7 +1578,7 @@ fun P2pMultiplayerSyncDialog(
                         coopPeers.forEach { peer ->
                             val statusTag = if (peer.isDowned) "DOWNED (${peer.bleedoutRemainingMs / 1000}s)" else "HP ${peer.hp}/${peer.maxHp}"
                             Text(
-                                text = "• ${peer.callsign} [${if (peer.isAiBot) "AI BOT" else "LIVE PEER"}] — $statusTag — ${peer.radioCalloutText}",
+                                text = "| ${peer.callsign} [${if (peer.isAiBot) "AI BOT" else "LIVE PEER"}] -- $statusTag -- ${peer.radioCalloutText}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (peer.isDowned) ZombieCrimson else PhosphorGreen
                             )
@@ -1487,26 +1599,26 @@ fun P2pMultiplayerSyncDialog(
                 when (p2pStatus.transportMode) {
                     SyncTransportMode.LFS_HOSTED_SERVER -> {
                         Text("LFS DEDICATED SERVER (U1/U2) GUIDE", style = MaterialTheme.typography.titleMedium, color = PhosphorGreen)
-                        Text("• STEP 1: Tap 'LAUNCH / JOIN LFS ROOM' above with any LFS-XXXXXX code.", style = MaterialTheme.typography.bodyMedium)
-                        Text("• STEP 2: Share the 6-character code with up to 3 friends anywhere on Earth — zero port forwarding needed!", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 1: Tap 'LAUNCH / JOIN LFS ROOM' above with any LFS-XXXXXX code.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 2: Share the 6-character code with up to 3 friends anywhere on Earth -- zero port forwarding needed!", style = MaterialTheme.typography.bodyMedium)
                     }
                     SyncTransportMode.LFS_LOCAL_HOST_TUNNEL -> {
                         Text("HOST ON DEVICE + LFS REVERSE TUNNEL", style = MaterialTheme.typography.titleMedium, color = CryoCyan)
-                        Text("• Your phone runs the authoritative 60 FPS simulation and exposes a NAT-free reverse WebSocket tunnel through sync.lewisfamilysystems.com.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| Your phone runs the authoritative 60 FPS simulation and exposes a NAT-free reverse WebSocket tunnel through sync.lewisfamilysystems.com.", style = MaterialTheme.typography.bodyMedium)
                     }
                     SyncTransportMode.FIRESTORE_CLOUD_RELAY -> {
                         Text("CLOUD ROOM RELAY (FIRESTORE) GUIDE", style = MaterialTheme.typography.titleMedium, color = MysteryGold)
-                        Text("• Automatic Tier-B internet room relay synchronized by LFS-XXXXXX room code when dedicated WebSocket ports are blocked.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| Automatic Tier-B internet room relay synchronized by LFS-XXXXXX room code when dedicated WebSocket ports are blocked.", style = MaterialTheme.typography.bodyMedium)
                     }
                     SyncTransportMode.LAN_WIFI -> {
                         Text("WI-FI / HOTSPOT QUICK GUIDE (CRAZY EASY 2 STEPS)", style = MaterialTheme.typography.titleMedium, color = CryoCyan)
-                        Text("• STEP 1 (Host): Tap 'START HOSTING ROOM' below. Your phone broadcasts a LAN beacon automatically.", style = MaterialTheme.typography.bodyMedium)
-                        Text("• STEP 2 (Friend): Connect to the same Wi-Fi or Phone Hotspot. Your Host IP (${p2pStatus.localIpAddress}) will pop up under 'Discovered Rooms' for 1-tap Join!", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 1 (Host): Tap 'START HOSTING ROOM' below. Your phone broadcasts a LAN beacon automatically.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 2 (Friend): Connect to the same Wi-Fi or Phone Hotspot. Your Host IP (${p2pStatus.localIpAddress}) will pop up under 'Discovered Rooms' for 1-tap Join!", style = MaterialTheme.typography.bodyMedium)
                     }
                     SyncTransportMode.USB_ADB -> {
                         Text("USB CABLE LINK GUIDE (ZERO-LATENCY WIRED)", style = MaterialTheme.typography.titleMedium, color = MysteryGold)
-                        Text("• STEP 1: Plug your phone into your Linux/PC or second device via USB cable.", style = MaterialTheme.typography.bodyMedium)
-                        Text("• STEP 2: Run this 1-line bridge command on your computer terminal:", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 1: Plug your phone into your Linux/PC or second device via USB cable.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 2: Run this 1-line bridge command on your computer terminal:", style = MaterialTheme.typography.bodyMedium)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1531,12 +1643,12 @@ fun P2pMultiplayerSyncDialog(
                                 Text("COPY")
                             }
                         }
-                        Text("• STEP 3: Tap 'START HOSTING ROOM' on Device 1 and 'JOIN 127.0.0.1' on Device 2!", style = MaterialTheme.typography.bodyMedium)
+                        Text("| STEP 3: Tap 'START HOSTING ROOM' on Device 1 and 'JOIN 127.0.0.1' on Device 2!", style = MaterialTheme.typography.bodyMedium)
                     }
                     SyncTransportMode.BLUETOOTH_P2P -> {
                         Text("BLUETOOTH PAN & OFFLINE CAPSULE GUIDE", style = MaterialTheme.typography.titleMedium, color = PackPurple)
-                        Text("• FOR LIVE CO-OP OVER BLUETOOTH: Enable 'Bluetooth Tethering' in Android Settings after pairing phones, then tap 'START HOSTING ROOM'!", style = MaterialTheme.typography.bodyMedium)
-                        Text("• FOR INSTANT SAVE SYNC: Tap 'GENERATE & COPY CAPSULE' below to create an AES-256-GCM encrypted string you can send via Bluetooth Share, Quick Share, or Clipboard.", style = MaterialTheme.typography.bodyMedium)
+                        Text("| FOR LIVE CO-OP OVER BLUETOOTH: Enable 'Bluetooth Tethering' in Android Settings after pairing phones, then tap 'START HOSTING ROOM'!", style = MaterialTheme.typography.bodyMedium)
+                        Text("| FOR INSTANT SAVE SYNC: Tap 'GENERATE & COPY CAPSULE' below to create an AES-256-GCM encrypted string you can send via Bluetooth Share, Quick Share, or Clipboard.", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -1666,7 +1778,7 @@ fun P2pMultiplayerSyncDialog(
                         color = CryoCyan
                     )
                     Text(
-                        "TX: ${p2pStatus.packetsSent + oasisStatus.packetsSent} • RX: ${p2pStatus.packetsReceived + oasisStatus.packetsReceived}",
+                        "TX: ${p2pStatus.packetsSent + oasisStatus.packetsSent} | RX: ${p2pStatus.packetsReceived + oasisStatus.packetsReceived}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MysteryGold
                     )
@@ -2008,7 +2120,7 @@ fun WeaponArmoryDialog(
 ) {
     EmulatorModalContainer(
         title = "BOXHEAD & ZOMBIES WEAPON ARMORY",
-        subtitle = "Current Bank: ${gameState.points} PTS • Balanced Weapon Progression & Pack-a-Punch Tiers",
+        subtitle = "Current Bank: ${gameState.points} PTS | Balanced Weapon Progression & Pack-a-Punch Tiers",
         onDismiss = onDismiss
     ) {
         DEFAULT_WEAPONS.forEach { spec ->
@@ -2042,7 +2154,7 @@ fun WeaponArmoryDialog(
                             color = Color(spec.colorHex)
                         )
                         Text(
-                            text = "DMG: ${(spec.baseDamage * (1f + (level - 1) * 0.45f)).toInt()}x${spec.pelletCount} • Mag: ${spec.magazineSize + (level - 1) * 4} • Reload: ${"%.1f".format(spec.reloadMs / 1000f)}s",
+                            text = "DMG: ${(spec.baseDamage * (1f + (level - 1) * 0.45f)).toInt()}x${spec.pelletCount} | Mag: ${spec.magazineSize + (level - 1) * 4} | Reload: ${"%.1f".format(spec.reloadMs / 1000f)}s",
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
@@ -2209,7 +2321,7 @@ fun AiTacticalDirectorDialog(
         when (aiState) {
             is AiDirectorUiState.Idle -> {
                 Text(
-                    "Synthesize a custom seeded procedural bunker challenge or request an instant wave survival radio callout—100% functional offline without any account!",
+                    "Synthesize a custom seeded procedural bunker challenge or request an instant wave survival radio callout--100% functional offline without any account!",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2262,7 +2374,7 @@ fun AiTacticalDirectorDialog(
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(d.operationTitle, style = MaterialTheme.typography.titleLarge, color = MysteryGold)
                         Text(
-                            "Seed #${d.mapSeed} • Start Wave ${d.startingWave} • Grant +${d.bonusPoints} PTS • Weapon: ${d.recommendedWeaponId.uppercase()}",
+                            "Seed #${d.mapSeed} | Start Wave ${d.startingWave} | Grant +${d.bonusPoints} PTS | Weapon: ${d.recommendedWeaponId.uppercase()}",
                             style = MaterialTheme.typography.labelLarge,
                             color = CryoCyan
                         )
