@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="320"
+                android:endY="180"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#0B130E" />
+                <item android:offset="0.6" android:color="#132219" />
+                <item android:offset="1.0" android:color="#1F1218" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Tactical CRT Grid Lines -->
+    <path
+        android:strokeColor="#1F00FF66"
+        android:strokeWidth="1"
+        android:pathData="M0,30h320M0,60h320M0,90h320M0,120h320M0,150h320M40,0v180M80,0v180M120,0v180M160,0v180M200,0v180M240,0v180M280,0v180" />
+    <!-- Barricade Walls & Mystery Box -->
+    <path
+        android:fillColor="#2D3B32"
+        android:pathData="M20,20h60v14h-60zM240,20h60v14h-60zM20,146h70v14h-70zM230,146h70v14h-70z" />
+    <path
+        android:fillColor="#FFD166"
+        android:pathData="M140,22h40v22h-40z" />
+    <path
+        android:fillColor="#0B130E"
+        android:pathData="M156,27h8v8h-8zM156,37h8v4h-8z" />
+    <!-- Boxhead Player Survivor firing dual tracers -->
+    <path
+        android:fillColor="#00FF66"
+        android:pathData="M64,76h28v28h-28z" />
+    <path
+        android:fillColor="#FF2A54"
+        android:pathData="M62,80h32v6h-32z" />
+    <!-- Neon Tracer Beams -->
+    <path
+        android:fillColor="#FFD166"
+        android:pathData="M96,86h90v3h-90zM96,94h75v3h-75z" />
+    <!-- Explosive Red Barrel -->
+    <path
+        android:fillColor="#FF2A54"
+        android:pathData="M190,78h22v26h-22z" />
+    <path
+        android:fillColor="#FFD166"
+        android:pathData="M190,88h22v4h-22z" />
+    <!-- Incoming Zombie Horde Silhouettes -->
+    <path
+        android:fillColor="#7AE582"
+        android:pathData="M232,56h24v24h-24zM264,78h26v26h-26zM226,108h24v24h-24z" />
+    <path
+        android:fillColor="#FF2A54"
+        android:pathData="M236,64h5v5h-5zM246,64h5v5h-5zM268,86h6v6h-6zM278,86h6v6h-6zM230,116h5v5h-5zM240,116h5v5h-5z" />
+</vector>

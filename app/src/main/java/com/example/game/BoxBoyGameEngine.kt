@@ -1,0 +1,1390 @@
+package com.example.game
+
+import com.example.data.DEFAULT_WEAPONS
+import com.example.data.PerkType
+import com.example.data.WeaponSpec
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.random.Random
+import kotlin.system.measureNanoTime
+
+enum class ZombieArchetype(
+    val label: String,
+    val asciiChar: Char,
+    val speedMultiplier: Float,
+    val hpMultiplier: Float,
+    val radius: Float,
+    val rewardPoints: Int,
+    val colorHex: Long
+) {
+    SHAMBLER("Rotting Husk", 'z', 0.85f, 1.0f, 16f, 70, 0xFF7AE582),
+    SPRINTER("Hell Runner", 's', 1.20f, 0.75f, 14f, 90, 0xFFFF7B00),
+    CRAWLER("Acid Crawler", 'c', 0.95f, 0.65f, 12f, 80, 0xFF00E5FF),
+    CALCIFIED_STALKER("Calcified Stalker (Archer)", 'A', 0.78f, 1.35f, 15f, 130, 0xFFFF5252),
+    ABYSSAL_WEAVER("Abyssal Weaver (Mage)", 'W', 0.72f, 1.65f, 17f, 160, 0xFFB388FF),
+    DEVIL_BOSS("Boxhead Devil Anomaly", 'D', 0.74f, 4.8f, 25f, 450, 0xFFFF2A54)
+}
+
+data class ZombieEntity(
+    val id: Int,
+    val archetype: ZombieArchetype,
+    var x: Float,
+    var y: Float,
+    var hp: Int,
+    val maxHp: Int,
+    var attackCooldownMs: Long = 0L
+)
+
+data class BulletTracer(
+    val startX: Float,
+    val startY: Float,
+    val endX: Float,
+    val endY: Float,
+    val colorHex: Long,
+    var ttlMs: Long = 110L
+)
+
+data class ParticleBurst(
+    var x: Float,
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    val colorHex: Long,
+    var ttlMs: Long = 320L
+)
+
+data class FloatingBanner(
+    val text: String,
+    var x: Float,
+    var y: Float,
+    val colorHex: Long,
+    var ttlMs: Long = 900L
+)
+
+/**
+ * Dual-mode Speed Controller:
+ * - clockMultiplier scales overall simulation time (affecting every mechanic equally)
+ * - playerMoveMultiplier scales only player movement speed
+ * - zombieSpeedMultiplier scales only zombie movement speed
+ * - fireReloadMultiplier scales weapon fire rate & reload speed
+ */
+data class SpeedConfig(
+    val presetName: String = "Classic 1.0x",
+    val clockMultiplier: Float = 1.0f,
+    val playerMoveMultiplier: Float = 1.0f,
+    val zombieSpeedMultiplier: Float = 1.0f,
+    val fireReloadMultiplier: Float = 1.0f
+)
+
+data class AmmoTelemetry(
+    val shotsFired: Int = 0,
+    val shotsHit: Int = 0,
+    val reloadsCompleted: Int = 0,
+    val currentReloadTotalMs: Long = 0L,
+    val lightLockCrits: Int = 0
+) {
+    val accuracyPercent: Int
+        get() = if (shotsFired <= 0) 100 else ((shotsHit * 100) / shotsFired).coerceIn(0, 100)
+}
+
+data class BenchmarkReport(
+    val ticksSimulated: Int,
+    val zombieCountPeak: Int,
+    val totalElapsedMs: Double,
+    val avgTickMicros: Double,
+    val estimatedMaxFps: Int,
+    val killsDuringTest: Int
+)
+
+data class GameSessionState(
+    val mapSeed: Long = 19960227L,
+    val map: ProceduralMap = ProceduralMapEngine.generateMap(19960227L, ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS),
+    val unlockedRooms: Set<Int> = ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS,
+    val playerX: Float = ProceduralMapEngine.DEFAULT_SPAWN_X,
+    val playerY: Float = ProceduralMapEngine.DEFAULT_SPAWN_Y,
+    val playerVelX: Float = 0f,
+    val playerVelY: Float = 0f,
+    val aimAngleRad: Float = 0f,
+    val hp: Int = 100,
+    val maxHp: Int = 100,
+    val shield: Int = 60,
+    val maxShield: Int = 116,
+    val wave: Int = 1,
+    val zombiesRemainingInWave: Int = 8,
+    val points: Int = 600,
+    val totalKills: Int = 0,
+    val comboCount: Int = 0,
+    val comboTimerMs: Long = 0L,
+    val unlockedWeaponIds: List<String> = listOf("pistol"),
+    val weaponLevels: Map<String, Int> = mapOf("pistol" to 1),
+    val currentWeaponIndex: Int = 0,
+    val currentMagAmmo: Map<String, Int> = DEFAULT_WEAPONS.associate { it.id to it.magazineSize },
+    val reloadRemainingMs: Long = 0L,
+    val ammoTelemetry: AmmoTelemetry = AmmoTelemetry(),
+    val speedConfig: SpeedConfig = SpeedConfig(),
+    val aiBotEnabled: Boolean = false,
+    val activePerks: Set<PerkType> = emptySet(),
+    val zombies: List<ZombieEntity> = emptyList(),
+    val tracers: List<BulletTracer> = emptyList(),
+    val particles: List<ParticleBurst> = emptyList(),
+    val floatingBanners: List<FloatingBanner> = emptyList(),
+    val nearbyStation: InteractiveStation? = null,
+    // Phase 1: Abyssal Bio-Noir Lighting & Camera Tension
+    val cameraTension: CameraTensionState = CameraTensionState(),
+    // Phase 2: Non-Euclidean 7-Node Ring Buffer & Chunk Entropy
+    val mazeState: NonEuclideanMazeState = MazeDirector.createInitialMazeState(
+        19960227L,
+        ProceduralMapEngine.generateMap(19960227L, ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS)
+    ),
+    // Phase 3: Hybrid Combat, Archetypes & Auto-Drop Fortifications
+    val selectedFortificationType: FortificationType = FortificationType.RED_BARREL,
+    val fortifications: List<FortificationEntity> = emptyList(),
+    val laserTelegraphs: List<LaserTelegraph> = emptyList(),
+    val enemyProjectiles: List<EnemyProjectile> = emptyList(),
+    val elementalPuddles: List<ElementalPuddle> = emptyList(),
+    val siegeFabricator: SiegeFabricatorState = SiegeFabricatorState(),
+    // Phase 4: Borderlands 4-Part Modular Weapons, Light-Lock & Time-Freeze Inspect
+    val equippedModularWeapon: ModularWeaponInstance = ModularWeaponGenerator.createStarterModularWeapon("pistol"),
+    val modularWeaponInventory: Map<String, ModularWeaponInstance> = mapOf(
+        "pistol" to ModularWeaponGenerator.createStarterModularWeapon("pistol")
+    ),
+    val lootDrops: List<LootDropEntity> = emptyList(),
+    val nearbyLootDrop: LootDropEntity? = null,
+    val inspectedLootDrop: LootDropEntity? = null,
+    val lightLockTargetId: Int? = null,
+    // Phase 5: 7-Slot RPG Armor Rig, Palette Shader, Upgrade Anvil & Depth Escrow
+    val armorRig: ArmorRigState = ArmorRigState(),
+    val depthEscrow: DepthEscrowState = DepthEscrowState(),
+    val clockMs: Long = 0L,
+    val isPaused: Boolean = false,
+    val isGameOver: Boolean = false,
+    val statusToast: String = "OPEN CITY ONLINE — WASD Move • Click/Drag or Arrows to Aim & Fire!"
+) {
+    val currentWeapon: WeaponSpec
+        get() {
+            val id = unlockedWeaponIds.getOrNull(currentWeaponIndex) ?: "pistol"
+            return DEFAULT_WEAPONS.find { it.id == id } ?: DEFAULT_WEAPONS.first()
+        }
+
+    val currentWeaponLevel: Int
+        get() = weaponLevels[currentWeapon.id] ?: 1
+
+    val activeModularWeaponForCurrentSlot: ModularWeaponInstance
+        get() = modularWeaponInventory[currentWeapon.id] ?: equippedModularWeapon
+
+    val currentMaxMagSize: Int
+        get() {
+            val modMag = activeModularWeaponForCurrentSlot.effectiveMagSize
+            return modMag + (currentWeaponLevel - 1) * 4
+        }
+
+    val currentAmmoCount: Int
+        get() = currentMagAmmo[currentWeapon.id] ?: currentMaxMagSize
+
+    val reloadProgressFraction: Float
+        get() {
+            if (reloadRemainingMs <= 0L) return 1f
+            val total = ammoTelemetry.currentReloadTotalMs.coerceAtLeast(1L)
+            return (1f - (reloadRemainingMs.toFloat() / total.toFloat())).coerceIn(0f, 1f)
+        }
+
+    val emulatorSpeedMultiplier: Float
+        get() = speedConfig.clockMultiplier
+
+    /**
+     * Time-Freeze Loot Inspection pauses combat simulation automatically while inspecting a drop.
+     */
+    val isSimulationFrozen: Boolean
+        get() = isPaused || isGameOver || inspectedLootDrop != null
+}
+
+/**
+ * Pure, deterministic 60 FPS Boxhead + BO2 Zombies + Borderlands Modular Loot + Non-Euclidean Maze engine.
+ * Can be stepped both from Jetpack Compose UI and headlessly via Konsole TCP port 48900.
+ */
+class BoxBoyGameEngine {
+    private var nextEntityId = 1
+    private var lastFireTimestampMs = 0L
+    private var lastSpawnTimestampMs = 0L
+    private var lastEntropyBreachSpawnMs = 0L
+    private var clockMs = 0L
+    val flowFieldServer = FlowFieldServer()
+
+    fun stepFrame(
+        state: GameSessionState,
+        deltaMsRaw: Long,
+        moveXInput: Float,
+        moveYInput: Float,
+        isFiringInput: Boolean,
+        isAltBarrelDropInput: Boolean,
+        isInteractPressedInput: Boolean,
+        coopPeerX: Float?,
+        coopPeerY: Float?,
+        aimAngleOverrideRad: Float? = null
+    ): GameSessionState {
+        if (state.isSimulationFrozen) return state
+
+        val speedCfg = state.speedConfig
+        val scaledDeltaMs = (deltaMsRaw.coerceIn(4L, 100L) * speedCfg.clockMultiplier).toLong().coerceAtLeast(1L)
+        clockMs += scaledDeltaMs
+
+        var moveX = moveXInput
+        var moveY = moveYInput
+        var isFiring = isFiringInput
+        var isAltBarrelDrop = isAltBarrelDropInput
+        var isInteractPressed = isInteractPressedInput
+
+        // Optional Autonomous AI / LLM Bot override for hands-free stress-testing
+        if (state.aiBotEnabled && hypot(moveX, moveY) < 0.05f && !isFiring) {
+            val nearest = state.zombies.minByOrNull { hypot(it.x - state.playerX, it.y - state.playerY) }
+            val primedBarrel = state.map.barrels.firstOrNull { barrel ->
+                !barrel.isDetonated &&
+                    barrel.roomIndex in state.unlockedRooms &&
+                    hypot(barrel.x - state.playerX, barrel.y - state.playerY) in 95f..420f &&
+                    state.zombies.any { z -> hypot(z.x - barrel.x, z.y - barrel.y) <= 90f }
+            }
+
+            if (primedBarrel != null) {
+                val angToBarrel = atan2(primedBarrel.y - state.playerY, primedBarrel.x - state.playerX)
+                isFiring = true
+                moveX = -sin(angToBarrel) * 0.75f
+                moveY = cos(angToBarrel) * 0.75f
+            } else if (nearest != null) {
+                val dist = hypot(nearest.x - state.playerX, nearest.y - state.playerY)
+                val angToZ = atan2(nearest.y - state.playerY, nearest.x - state.playerX)
+                isFiring = dist < 460f
+                if (dist < 145f) {
+                    moveX = -cos(angToZ + 0.55f)
+                    moveY = -sin(angToZ + 0.55f)
+                } else if (dist > 260f) {
+                    moveX = cos(angToZ) * 0.7f
+                    moveY = sin(angToZ) * 0.7f
+                } else {
+                    moveX = -sin(angToZ) * 0.8f
+                    moveY = cos(angToZ) * 0.8f
+                }
+            }
+            if (state.nearbyStation != null && state.points >= state.nearbyStation.cost &&
+                state.nearbyStation.kind != StationKind.UPGRADE_ANVIL
+            ) {
+                isInteractPressed = true
+            }
+        }
+
+        var hp = state.hp
+        var maxHp = if (PerkType.JUGGERNOG in state.activePerks) 200 else 100
+        val maxShield = 50 + state.armorRig.totalBonusMaxShield
+        var shield = state.shield.coerceAtMost(maxShield)
+        var points = state.points
+        var totalKills = state.totalKills
+        var comboCount = state.comboCount
+        var comboTimerMs = (state.comboTimerMs - scaledDeltaMs).coerceAtLeast(0L)
+        if (comboTimerMs == 0L) comboCount = 0
+        var depthEscrow = state.depthEscrow
+
+        val zombies = state.zombies.map { it.copy() }.toMutableList()
+        val tracers = state.tracers.mapNotNull {
+            val rem = it.ttlMs - scaledDeltaMs
+            if (rem > 0) it.copy(ttlMs = rem) else null
+        }.toMutableList()
+        val particles = state.particles.mapNotNull {
+            val rem = it.ttlMs - scaledDeltaMs
+            val dt = scaledDeltaMs / 1000f
+            if (rem > 0) it.copy(x = it.x + it.vx * dt, y = it.y + it.vy * dt, ttlMs = rem) else null
+        }.toMutableList()
+        val banners = state.floatingBanners.mapNotNull {
+            val rem = it.ttlMs - scaledDeltaMs
+            val dt = scaledDeltaMs / 1000f
+            if (rem > 0) it.copy(y = it.y - 22f * dt, ttlMs = rem) else null
+        }.toMutableList()
+        val barrels = state.map.barrels.toMutableList()
+        val stations = state.map.stations.toMutableList()
+        val fortifications = state.fortifications.map { it.copy() }.toMutableList()
+        val laserTelegraphs = state.laserTelegraphs.map { it.copy() }.toMutableList()
+        val enemyProjectiles = state.enemyProjectiles.map { it.copy() }.toMutableList()
+        val elementalPuddles = state.elementalPuddles.map { it.copy() }.toMutableList()
+        val lootDrops = state.lootDrops.toMutableList()
+
+        val dtSec = scaledDeltaMs / 1000f
+
+        // PHASE 3: Step Ranged Stalkers, Elemental Weavers, Projectiles, Puddles & Fortifications
+        val (phase3Damage, puddleSlowFactor) = TacticalCombatCoordinator.stepPhase3Combat(
+            deltaMs = scaledDeltaMs,
+            dtSec = dtSec,
+            playerX = state.playerX,
+            playerY = state.playerY,
+            zombies = zombies,
+            telegraphs = laserTelegraphs,
+            enemyProjectiles = enemyProjectiles,
+            elementalPuddles = elementalPuddles,
+            fortifications = fortifications,
+            tracers = tracers,
+            particles = particles,
+            banners = banners,
+            nextEntityIdProvider = { nextEntityId++ }
+        )
+
+        if (phase3Damage > 0) {
+            val mitigated = (phase3Damage * (1f - state.armorRig.damageReductionFraction)).roundToInt().coerceAtLeast(1)
+            val absorbedByShield = min(shield, mitigated)
+            shield -= absorbedByShield
+            hp = (hp - (mitigated - absorbedByShield)).coerceAtLeast(0)
+        }
+
+        val striderImmuneToSlow = state.armorRig.countForSet(ArmorSetArchetype.OVERCLOCK_STRIDER) >= 4
+        val effectivePuddleSlow = if (striderImmuneToSlow) 1.0f else puddleSlowFactor
+
+        // 1. Player Movement & Room Bounds Collision (with Velocity Inertia + 2x Physics Sub-Stepping + Smooth Corner-Slide)
+        val perkSpeedBoost = if (PerkType.STAMIN_UP in state.activePerks) 1.25f else 1.0f
+        val armorSpeedBoost = state.armorRig.totalMoveSpeedMultiplier
+        val moveSpeedPxPerSec = 232f * perkSpeedBoost * armorSpeedBoost * effectivePuddleSlow * speedCfg.playerMoveMultiplier
+
+        val targetVelX = moveX * moveSpeedPxPerSec
+        val targetVelY = moveY * moveSpeedPxPerSec
+        val hasMoveInput = hypot(moveX, moveY) > 0.03f
+        val accelRate = if (hasMoveInput) 36f else 28f
+        val velAlpha = (dtSec * accelRate).coerceIn(0.35f, 1f)
+        var curVelX = state.playerVelX + (targetVelX - state.playerVelX) * velAlpha
+        var curVelY = state.playerVelY + (targetVelY - state.playerVelY) * velAlpha
+        if (!hasMoveInput && hypot(curVelX, curVelY) < 4f) {
+            curVelX = 0f
+            curVelY = 0f
+        }
+
+        // 2x Physics Sub-Stepping prevents tunneling and makes sliding along jagged borders & buildings silky-smooth
+        var nx = state.playerX
+        var ny = state.playerY
+        val subSteps = 2
+        val subDt = dtSec / subSteps.toFloat()
+        repeat(subSteps) {
+            val stepDx = curVelX * subDt
+            val stepDy = curVelY * subDt
+            val candX = nx + stepDx
+            val candY = ny + stepDy
+
+            if (isWalkable(candX, candY, state.map, state.unlockedRooms)) {
+                nx = candX
+                ny = candY
+            } else {
+                // Separate X and Y axis sliding with diagonal corner-nudge assistance
+                val slideNudge = hypot(stepDx, stepDy) * 0.72f
+                val canMoveX = isWalkable(candX, ny, state.map, state.unlockedRooms)
+                val canMoveY = isWalkable(nx, candY, state.map, state.unlockedRooms)
+                if (canMoveX) {
+                    nx = candX
+                } else if (abs(moveY) < 0.4f) {
+                    if (isWalkable(candX, ny - 15f, state.map, state.unlockedRooms)) {
+                        ny -= slideNudge
+                    } else if (isWalkable(candX, ny + 15f, state.map, state.unlockedRooms)) {
+                        ny += slideNudge
+                    }
+                }
+                if (canMoveY) {
+                    ny = candY
+                } else if (abs(moveX) < 0.4f) {
+                    if (isWalkable(nx - 15f, candY, state.map, state.unlockedRooms)) {
+                        nx -= slideNudge
+                    } else if (isWalkable(nx + 15f, candY, state.map, state.unlockedRooms)) {
+                        nx += slideNudge
+                    }
+                }
+            }
+        }
+
+        // PHASE 2: Step Non-Euclidean 7-Node Ring Buffer Maze Director & 10 Hz Dijkstra Flow-Field Server
+        val (updatedMazeState, mazeSyncedMap) = MazeDirector.stepMazeDirector(
+            mazeState = state.mazeState,
+            map = state.map.copy(stations = stations, barrels = barrels),
+            unlockedRooms = state.unlockedRooms,
+            playerX = nx,
+            playerY = ny,
+            deltaMs = scaledDeltaMs
+        )
+
+        if (updatedMazeState.totalDoorwaysCrossed + 1 > depthEscrow.deepestMazeDepthReached) {
+            depthEscrow = depthEscrow.copy(deepestMazeDepthReached = updatedMazeState.totalDoorwaysCrossed + 1)
+        }
+
+        flowFieldServer.updateIfDue(
+            clockMs = clockMs,
+            map = mazeSyncedMap,
+            unlockedRooms = state.unlockedRooms,
+            fortifications = fortifications,
+            playerX = nx,
+            playerY = ny,
+            coopPeerX = coopPeerX,
+            coopPeerY = coopPeerY
+        )
+
+        // PHASE 4: Light-Lock Auto-Aim & Lantern Illumination Synergy + Responsive Turning
+        val modWeapon = state.activeModularWeaponForCurrentSlot
+        val totalLanternRange = 430f + state.armorRig.totalLanternRangeBonusPx + modWeapon.optic.lanternRangeBonusPx
+        val totalConeSpread = 0.56f + modWeapon.optic.lightLockConeBonusRad
+
+        var aimAngle = state.aimAngleRad
+        if (aimAngleOverrideRad != null) {
+            // Direct mouse/touch world pointer or Arrow-Key twin-stick aim: turn immediately & accurately
+            var diff = aimAngleOverrideRad - aimAngle
+            while (diff > Math.PI) diff -= (2.0 * Math.PI).toFloat()
+            while (diff < -Math.PI) diff += (2.0 * Math.PI).toFloat()
+            val aimLerp = (dtSec * 36f).coerceIn(0.62f, 1f)
+            aimAngle += diff * aimLerp
+        } else if (hypot(moveX, moveY) > 0.08f) {
+            // Single-stick / WASD movement turning: turn crisply toward movement vector
+            val desiredAngle = atan2(moveY, moveX)
+            var diff = desiredAngle - aimAngle
+            while (diff > Math.PI) diff -= (2.0 * Math.PI).toFloat()
+            while (diff < -Math.PI) diff += (2.0 * Math.PI).toFloat()
+            val turnLerp = (dtSec * 28f).coerceIn(0.45f, 1f)
+            aimAngle += diff * turnLerp
+        }
+
+        val (lockTarget, isIlluminatedLock) = ModularWeaponGenerator.findLightLockTarget(
+            zombies = zombies,
+            playerX = nx,
+            playerY = ny,
+            currentAimRad = aimAngle,
+            lanternRange = totalLanternRange,
+            coneHalfSpreadRad = totalConeSpread
+        )
+        val lightLockTargetId = if (isIlluminatedLock) lockTarget?.id else null
+        // Gentle front-cone magnetism ONLY when no manual aim override is active and target is within a narrow 22° front arc
+        if (aimAngleOverrideRad == null && lockTarget != null && isFiring) {
+            val desiredAim = atan2(lockTarget.y - ny, lockTarget.x - nx)
+            var diff = desiredAim - aimAngle
+            while (diff > Math.PI) diff -= (2.0 * Math.PI).toFloat()
+            while (diff < -Math.PI) diff += (2.0 * Math.PI).toFloat()
+            if (abs(diff) <= 0.38f) {
+                val lockLerp = (dtSec * 14f).coerceIn(0.15f, 0.38f)
+                aimAngle += diff * lockLerp
+            }
+        }
+
+        // 2. Reload & Modular Weapon Firing + Ammo Telemetry
+        val wasReloading = state.reloadRemainingMs > 0L
+        var reloadRemainingMs = (state.reloadRemainingMs - scaledDeltaMs).coerceAtLeast(0L)
+        val magAmmo = state.currentMagAmmo.toMutableMap()
+        val weapon = state.currentWeapon
+        val weaponLvl = state.currentWeaponLevel
+        val effectiveMagSize = state.currentMaxMagSize
+        var telemetry = state.ammoTelemetry
+
+        if (reloadRemainingMs == 0L && (magAmmo[weapon.id] ?: 0) <= 0) {
+            magAmmo[weapon.id] = effectiveMagSize
+            if (wasReloading) {
+                telemetry = telemetry.copy(reloadsCompleted = telemetry.reloadsCompleted + 1)
+                banners.add(FloatingBanner("MAG FULL ($effectiveMagSize)", nx, ny - 24f, 0xFF00E5FF, 650L))
+            }
+        }
+
+        val perkFireRateFactor = if (PerkType.DOUBLE_TAP in state.activePerks) 0.68f else 1.0f
+        val effectiveCooldown = (
+            (modWeapon.effectiveFireCooldownMs * perkFireRateFactor * (1f - (weaponLvl - 1) * 0.06f)) /
+                speedCfg.fireReloadMultiplier.coerceAtLeast(0.25f)
+            ).toLong().coerceAtLeast(35L)
+
+        var didFireThisTick = false
+        if (isFiring && reloadRemainingMs == 0L && clockMs - lastFireTimestampMs >= effectiveCooldown) {
+            lastFireTimestampMs = clockMs
+            didFireThisTick = true
+            val currentBullets = magAmmo[weapon.id] ?: effectiveMagSize
+            val papMultiplier = 1f + (weaponLvl - 1) * 0.42f
+            val baseShotDamage = (modWeapon.effectiveDamage * papMultiplier).roundToInt()
+            var anyPelletHit = false
+            var anyCritHit = false
+
+            repeat(modWeapon.effectivePelletCount) {
+                val spreadScale = if (isIlluminatedLock) 0.65f else 1.0f
+                val spreadRad = Math.toRadians(
+                    ((Random.nextFloat() - 0.5f) * modWeapon.effectiveSpreadDegrees * spreadScale).toDouble()
+                ).toFloat()
+                val shotAngle = aimAngle + spreadRad
+                val maxRange = 540f + modWeapon.barrel.rangeBonusPx
+                var endX = nx + cos(shotAngle) * maxRange
+                var endY = ny + sin(shotAngle) * maxRange
+
+                // Check barrel hits
+                barrels.forEachIndexed { bIdx, barrel ->
+                    if (!barrel.isDetonated && barrel.roomIndex in state.unlockedRooms) {
+                        val distToRay = pointToSegmentDistance(barrel.x, barrel.y, nx, ny, endX, endY)
+                        if (distToRay <= 24f) {
+                            anyPelletHit = true
+                            barrels[bIdx] = barrel.copy(isDetonated = true)
+                            triggerBarrelExplosion(barrel.x, barrel.y, zombies, particles, banners).also { (kills, pts) ->
+                                totalKills += kills
+                                points += pts
+                                comboCount += kills
+                                if (kills > 0) comboTimerMs = 4500L
+                            }
+                        }
+                    }
+                }
+
+                // Check zombie hits along ray
+                var pierced = 0
+                val hitCandidates = zombies
+                    .filter { pointToSegmentDistance(it.x, it.y, nx, ny, endX, endY) <= it.archetype.radius + 8f }
+                    .sortedBy { hypot(it.x - nx, it.y - ny) }
+
+                for (z in hitCandidates) {
+                    if (pierced >= modWeapon.effectivePierceCount) break
+                    anyPelletHit = true
+
+                    val targetIlluminated = AbyssalChiaroscuroLightingEngine.isPointIlluminatedByPlayer(
+                        targetX = z.x,
+                        targetY = z.y,
+                        playerX = nx,
+                        playerY = ny,
+                        aimAngleRad = aimAngle,
+                        lanternRange = totalLanternRange,
+                        coneHalfSpreadRad = totalConeSpread
+                    )
+                    val finalHitDamage = if (targetIlluminated) {
+                        anyCritHit = true
+                        (baseShotDamage * modWeapon.illuminatedCritMultiplier).roundToInt()
+                    } else {
+                        baseShotDamage
+                    }
+
+                    z.hp -= finalHitDamage
+                    pierced++
+                    if (pierced == modWeapon.effectivePierceCount) {
+                        endX = z.x
+                        endY = z.y
+                    }
+                    if (weapon.isExplosive) {
+                        triggerBarrelExplosion(z.x, z.y, zombies, particles, banners, radius = 95f, damage = finalHitDamage)
+                    }
+                    if (particles.size < 120) {
+                        repeat(2) {
+                            particles.add(
+                                ParticleBurst(
+                                    x = z.x,
+                                    y = z.y,
+                                    vx = Random.nextInt(-120, 120).toFloat(),
+                                    vy = Random.nextInt(-120, 120).toFloat(),
+                                    colorHex = if (z.hp <= 0) 0xFFFF2A54 else modWeapon.magazine.elementalAffinity.colorHex
+                                )
+                            )
+                        }
+                    }
+                    if (z.hp <= 0) {
+                        comboCount++
+                        comboTimerMs = 4500L
+                        val mult = (1 + comboCount / 5).coerceAtMost(8)
+                        val earned = z.archetype.rewardPoints * mult
+                        points += earned
+                        totalKills++
+                        depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 2)
+                        if (state.armorRig.countForSet(ArmorSetArchetype.VOID_ALCHEMIST) >= 4) {
+                            shield = (shield + 5).coerceAtMost(maxShield)
+                        }
+                        banners.add(
+                            FloatingBanner(
+                                text = "+$earned ${if (targetIlluminated) "CRIT!" else ""}",
+                                x = z.x,
+                                y = z.y - 14f,
+                                colorHex = if (targetIlluminated) 0xFF00E5FF else 0xFF00FF66
+                            )
+                        )
+                        // Phase 4 & 5: Roll procedural Modular Weapon or 7-Slot Armor drop
+                        maybeSpawnLootDrop(
+                            zombie = z,
+                            wave = state.wave,
+                            lootDrops = lootDrops,
+                            banners = banners
+                        )
+                    }
+                }
+
+                tracers.add(
+                    BulletTracer(
+                        startX = nx + cos(shotAngle) * 16f,
+                        startY = ny + sin(shotAngle) * 16f,
+                        endX = endX,
+                        endY = endY,
+                        colorHex = if (weaponLvl >= 2) 0xFF00E5FF else modWeapon.magazine.elementalAffinity.colorHex
+                    )
+                )
+            }
+
+            zombies.removeAll { it.hp <= 0 }
+            telemetry = telemetry.copy(
+                shotsFired = telemetry.shotsFired + 1,
+                shotsHit = telemetry.shotsHit + if (anyPelletHit) 1 else 0,
+                lightLockCrits = telemetry.lightLockCrits + if (anyCritHit) 1 else 0
+            )
+
+            val nextAmmo = currentBullets - 1
+            if (nextAmmo <= 0) {
+                val perkReloadFactor = if (PerkType.SPEED_COLA in state.activePerks) 0.5f else 1.0f
+                val armorReloadBoost = state.armorRig.totalReloadSpeedMultiplier
+                val totalReloadMs = (
+                    (modWeapon.effectiveReloadMs * perkReloadFactor) /
+                        (speedCfg.fireReloadMultiplier * armorReloadBoost).coerceAtLeast(0.25f)
+                    ).toLong().coerceAtLeast(180L)
+                reloadRemainingMs = totalReloadMs
+                telemetry = telemetry.copy(currentReloadTotalMs = totalReloadMs)
+                magAmmo[weapon.id] = 0
+            } else {
+                magAmmo[weapon.id] = nextAmmo
+            }
+        }
+
+        // Remove any zombies killed by Cryo Mines, Puddles, or Auto-Turret Beacons
+        val secondaryKills = zombies.filter { it.hp <= 0 }
+        for (zk in secondaryKills) {
+            totalKills++
+            points += zk.archetype.rewardPoints
+            maybeSpawnLootDrop(zk, state.wave, lootDrops, banners)
+        }
+        zombies.removeAll { it.hp <= 0 }
+
+        // 3. Phase 3 Contextual 1-Tap Fortification Placement (Barrel / Barricade Wall / Cryo Mine / Auto-Turret)
+        var statusToast = state.statusToast
+        if (isAltBarrelDrop) {
+            val fortType = state.selectedFortificationType
+            if (fortType == FortificationType.RED_BARREL) {
+                if (points >= fortType.costPoints && barrels.count { !it.isDetonated } < 18) {
+                    points -= fortType.costPoints
+                    barrels.add(
+                        ExplosiveBarrel(
+                            id = nextEntityId++,
+                            x = nx,
+                            y = ny,
+                            roomIndex = updatedMazeState.activeRoomSector
+                        )
+                    )
+                    banners.add(FloatingBanner("BARREL PLACED!", nx, ny - 20f, 0xFFFF2A54))
+                }
+            } else if (points >= fortType.costPoints && fortifications.size < 14) {
+                points -= fortType.costPoints
+                fortifications.add(
+                    FortificationEntity(
+                        id = nextEntityId++,
+                        kind = fortType,
+                        x = nx,
+                        y = ny,
+                        roomIndex = updatedMazeState.activeRoomSector
+                    )
+                )
+                banners.add(FloatingBanner("${fortType.shortCode} DEPLOYED!", nx, ny - 20f, fortType.colorHex))
+                statusToast = "DEPLOYED ${fortType.displayName.uppercase()} (-${fortType.costPoints} PTS)"
+            }
+        }
+
+        // Step Siege Fabricator Timer (Phase 3)
+        var siegeState = state.siegeFabricator
+        if (siegeState.isActive) {
+            val remSiege = (siegeState.remainingMs - scaledDeltaMs).coerceAtLeast(0L)
+            if (remSiege == 0L) {
+                siegeState = siegeState.copy(
+                    isActive = false,
+                    remainingMs = 0L,
+                    fabricationsCompleted = siegeState.fabricationsCompleted + 1
+                )
+                // Spawn guaranteed Epic/Legendary Modular Weapon + Armor Cache + Crystals
+                val dropSeed = clockMs xor state.mapSeed
+                val rewardWpn = ModularWeaponGenerator.generateProceduralWeapon(
+                    seed = dropSeed,
+                    wave = state.wave + 2,
+                    guaranteedMinRarity = LootRarity.EPIC
+                )
+                val rewardArmor = RpgArmorGenerator.generateProceduralArmorPiece(
+                    seed = dropSeed xor 0x99AAFFL,
+                    wave = state.wave + 2,
+                    minRarity = LootRarity.RARE
+                )
+                lootDrops.add(
+                    LootDropEntity(
+                        id = nextEntityId++,
+                        x = nx + 36f,
+                        y = ny,
+                        rarity = rewardWpn.rarity,
+                        payloadKind = LootPayloadKind.MODULAR_WEAPON,
+                        weaponPayload = rewardWpn,
+                        spawnedAtWave = state.wave
+                    )
+                )
+                lootDrops.add(
+                    LootDropEntity(
+                        id = nextEntityId++,
+                        x = nx - 36f,
+                        y = ny,
+                        rarity = rewardArmor.rarity,
+                        payloadKind = LootPayloadKind.RPG_ARMOR_PIECE,
+                        armorPayload = rewardArmor,
+                        spawnedAtWave = state.wave
+                    )
+                )
+                depthEscrow = depthEscrow.copy(
+                    abyssalScrap = depthEscrow.abyssalScrap + 65,
+                    abyssalCrystals = depthEscrow.abyssalCrystals + 2
+                )
+                points += 850
+                banners.add(FloatingBanner("SIEGE COMPLETE! +LOOT CACHE", nx, ny - 32f, 0xFFFFD166, 1600L))
+                statusToast = "SIEGE FABRICATION COMPLETE — Epic Weapon & Armor Cache Dropped!"
+            } else {
+                siegeState = siegeState.copy(remainingMs = remSiege)
+            }
+        }
+
+        // Phase 2 Chunk Entropy Anti-Turtling Breacher Spawn (>180s in same room)
+        val activeEntropyStage = updatedMazeState.currentRoomNode?.entropyStage ?: RoomEntropyStage.STABLE
+        if (activeEntropyStage == RoomEntropyStage.CRITICAL_BREACH &&
+            clockMs - lastEntropyBreachSpawnMs >= 4200L &&
+            zombies.size < 36
+        ) {
+            lastEntropyBreachSpawnMs = clockMs
+            val arch = if (Random.nextBoolean()) ZombieArchetype.CALCIFIED_STALKER else ZombieArchetype.ABYSSAL_WEAVER
+            val zHp = ((65 + state.wave * 26) * arch.hpMultiplier).toInt()
+            zombies.add(
+                ZombieEntity(
+                    id = nextEntityId++,
+                    archetype = arch,
+                    x = (nx + Random.nextInt(-220, 220)).coerceIn(110f, 4660f),
+                    y = (ny + Random.nextInt(-220, 220)).coerceIn(110f, 2620f),
+                    hp = zHp,
+                    maxHp = zHp
+                )
+            )
+            banners.add(FloatingBanner("ENTROPY BREACH!", nx, ny - 30f, 0xFFFF2A54, 1100L))
+        }
+
+        // 4. Spawn Zombies from Active Sector Windows (measured tactical cadence)
+        var remainingToSpawn = state.zombiesRemainingInWave
+        var wave = state.wave
+        val maxConcurrentZombies = (8 + wave * 2).coerceAtMost(32)
+        val baseSpawnInterval = (2450L - wave * 75L).coerceAtLeast(850L)
+        val spawnIntervalMs = if (siegeState.isActive) (baseSpawnInterval * 0.72f).toLong() else baseSpawnInterval
+
+        if ((remainingToSpawn > 0 || siegeState.isActive) &&
+            zombies.size < maxConcurrentZombies &&
+            clockMs - lastSpawnTimestampMs >= spawnIntervalMs
+        ) {
+            lastSpawnTimestampMs = clockMs
+            val activeWindows = stations.filter {
+                it.kind == StationKind.BARRICADE_WINDOW && it.roomIndex in state.unlockedRooms
+            }
+            val spawnWin = activeWindows.randomOrNull()
+            if (spawnWin != null) {
+                val winIdx = stations.indexOfFirst { it.id == spawnWin.id }
+                if (winIdx >= 0 && stations[winIdx].barricadePlanks > 0 && Random.nextFloat() < 0.45f) {
+                    stations[winIdx] = stations[winIdx].copy(barricadePlanks = stations[winIdx].barricadePlanks - 1)
+                } else {
+                    val roll = Random.nextFloat()
+                    val arch = when {
+                        wave % 4 == 0 && remainingToSpawn == 1 -> ZombieArchetype.DEVIL_BOSS
+                        (wave >= 2 || siegeState.isActive) && roll < 0.20f -> ZombieArchetype.CALCIFIED_STALKER
+                        (wave >= 3 || siegeState.isActive) && roll < 0.36f -> ZombieArchetype.ABYSSAL_WEAVER
+                        wave >= 3 && roll < 0.56f -> ZombieArchetype.SPRINTER
+                        wave >= 2 && roll < 0.72f -> ZombieArchetype.CRAWLER
+                        else -> ZombieArchetype.SHAMBLER
+                    }
+                    val baseHp = (55 + wave * 24)
+                    val zHp = (baseHp * arch.hpMultiplier).toInt()
+                    zombies.add(
+                        ZombieEntity(
+                            id = nextEntityId++,
+                            archetype = arch,
+                            x = spawnWin.x + Random.nextInt(-22, 22),
+                            y = spawnWin.y + Random.nextInt(-22, 22),
+                            hp = zHp,
+                            maxHp = zHp
+                        )
+                    )
+                    if (remainingToSpawn > 0) remainingToSpawn--
+                }
+            }
+        }
+
+        // Advance Wave when all zombies cleared
+        if (remainingToSpawn <= 0 && zombies.isEmpty() && !siegeState.isActive) {
+            wave++
+            remainingToSpawn = 7 + wave * 3
+            hp = maxHp
+            shield = maxShield
+            for (i in barrels.indices) {
+                barrels[i] = barrels[i].copy(isDetonated = false)
+            }
+            depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 25)
+            statusToast = "WAVE $wave INCOMING — Shield Recharged & +25 Abyssal Scrap!"
+            banners.add(FloatingBanner("WAVE $wave!", nx, ny - 30f, 0xFFFFD166, ttlMs = 1500L))
+        }
+
+        // 5. Phase 2 Flow-Field Driven Enemy Movement & Melee Attacks (Smooth Blended Steering + Soft Separation)
+        val zBaseSpeed = (36f + wave * 2.4f).coerceAtMost(82f) * speedCfg.zombieSpeedMultiplier
+        val zombieCount = zombies.size
+        for (zi in 0 until zombieCount) {
+            val z = zombies[zi]
+            val d1 = hypot(nx - z.x, ny - z.y)
+            val d2 = if (coopPeerX != null && coopPeerY != null) hypot(coopPeerX - z.x, coopPeerY - z.y) else Float.MAX_VALUE
+            val tx = if (d2 < d1 && coopPeerX != null) coopPeerX else nx
+            val ty = if (d2 < d1 && coopPeerY != null) coopPeerY else ny
+            val dist = min(d1, d2).coerceAtLeast(0.001f)
+
+            // Check if a player Barricade Wall is blocking this enemy
+            val blockingWall = fortifications.firstOrNull {
+                it.kind == FortificationType.BARRICADE_WALL &&
+                    it.hp > 0 &&
+                    hypot(it.x - z.x, it.y - z.y) <= z.archetype.radius + 24f
+            }
+            if (blockingWall != null) {
+                z.attackCooldownMs = (z.attackCooldownMs - scaledDeltaMs).coerceAtLeast(0L)
+                if (z.attackCooldownMs == 0L) {
+                    z.attackCooldownMs = 950L
+                    blockingWall.hp = (blockingWall.hp - 20).coerceAtLeast(0)
+                }
+                continue
+            }
+
+            // Ranged archetypes (Calcified Stalker & Abyssal Weaver) hold standoff distance when within 220..360px
+            val holdsStandoff = (z.archetype == ZombieArchetype.CALCIFIED_STALKER ||
+                z.archetype == ZombieArchetype.ABYSSAL_WEAVER) && dist in 220f..360f
+
+            if (!holdsStandoff && dist > z.archetype.radius + 14f) {
+                val (flowVx, flowVy) = flowFieldServer.sampleFlowVector(z.x, z.y, tx, ty)
+                val directVx = (tx - z.x) / dist
+                val directVy = (ty - z.y) / dist
+
+                // Blend Flow-Field vector with direct line-of-sight vector for organic diagonal tracking
+                val directWeight = if (dist < 420f) 0.55f else 0.25f
+                var steerX = flowVx * (1f - directWeight) + directVx * directWeight
+                var steerY = flowVy * (1f - directWeight) + directVy * directWeight
+
+                // Soft zombie-to-zombie separation so hordes don't stack on a single pixel
+                var sepX = 0f
+                var sepY = 0f
+                val minSepDist = z.archetype.radius * 2.1f
+                for (oj in 0 until zombieCount) {
+                    if (oj == zi) continue
+                    val other = zombies[oj]
+                    val sdx = z.x - other.x
+                    val sdy = z.y - other.y
+                    if (abs(sdx) < minSepDist && abs(sdy) < minSepDist) {
+                        val sDist = hypot(sdx, sdy)
+                        if (sDist in 0.1f..minSepDist) {
+                            val push = (minSepDist - sDist) / minSepDist
+                            sepX += (sdx / sDist) * push * 0.45f
+                            sepY += (sdy / sDist) * push * 0.45f
+                        }
+                    }
+                }
+                steerX += sepX
+                steerY += sepY
+                val steerMag = hypot(steerX, steerY).coerceAtLeast(0.001f)
+                steerX /= steerMag
+                steerY /= steerMag
+
+                val step = zBaseSpeed * z.archetype.speedMultiplier * dtSec
+                val candX = z.x + steerX * step
+                val candY = z.y + steerY * step
+                if (isWalkable(candX, candY, mazeSyncedMap, state.unlockedRooms)) {
+                    z.x = candX
+                    z.y = candY
+                } else if (isWalkable(candX, z.y, mazeSyncedMap, state.unlockedRooms)) {
+                    z.x = candX
+                } else if (isWalkable(z.x, candY, mazeSyncedMap, state.unlockedRooms)) {
+                    z.y = candY
+                } else {
+                    z.x += directVx * step * 0.6f
+                    z.y += directVy * step * 0.6f
+                }
+            } else if (d1 <= z.archetype.radius + 18f) {
+                z.attackCooldownMs = (z.attackCooldownMs - scaledDeltaMs).coerceAtLeast(0L)
+                if (z.attackCooldownMs == 0L) {
+                    z.attackCooldownMs = 1050L
+                    val rawDmg = if (z.archetype == ZombieArchetype.DEVIL_BOSS) 26 else 14
+                    val mitigated = (rawDmg * (1f - state.armorRig.damageReductionFraction)).roundToInt().coerceAtLeast(2)
+                    val absorbed = min(shield, mitigated)
+                    shield -= absorbed
+                    val hpLoss = mitigated - absorbed
+                    hp = (hp - hpLoss).coerceAtLeast(0)
+                    banners.add(FloatingBanner("-$mitigated", nx, ny - 18f, 0xFFFF2A54))
+                }
+            }
+        }
+
+        // Check Quick Revive Solo self-revive or Game Over
+        var activePerks = state.activePerks
+        var isGameOver = false
+        if (hp <= 0) {
+            if (PerkType.QUICK_REVIVE in activePerks || state.aiBotEnabled) {
+                activePerks = activePerks - PerkType.QUICK_REVIVE
+                hp = maxHp
+                shield = maxShield
+                zombies.removeIf { hypot(it.x - nx, it.y - ny) < 180f }
+                statusToast = "QUICK REVIVE ACTIVATED — Shockwave cleared nearby undead!"
+                banners.add(FloatingBanner("SELF-REVIVED!", nx, ny - 28f, 0xFF00E5FF, 1500L))
+            } else {
+                isGameOver = true
+                statusToast = "SURVIVOR DOWN AT WAVE $wave — Tap Replay Seed or Load Save State"
+            }
+        }
+
+        // 6. Nearby Loot Drop Detection (Phase 4 Time-Freeze Inspection) & Interactive Stations
+        var unlockedRooms = state.unlockedRooms
+        var unlockedWeapons = state.unlockedWeaponIds
+        var weaponLevels = state.weaponLevels
+        var currentWeaponIdx = state.currentWeaponIndex
+        var inspectedLootDrop: LootDropEntity? = state.inspectedLootDrop
+        var modularInventory = state.modularWeaponInventory
+        var equippedModular = state.equippedModularWeapon
+
+        val nearbyLoot = lootDrops
+            .minByOrNull { hypot(it.x - nx, it.y - ny) }
+            ?.takeIf { hypot(it.x - nx, it.y - ny) <= 58f }
+
+        val nearby = stations
+            .filter {
+                it.roomIndex in unlockedRooms &&
+                    (it.kind != StationKind.DEBRIS_DOOR || it.targetRoomIndex !in unlockedRooms)
+            }
+            .minByOrNull { hypot(it.x - nx, it.y - ny) }
+            ?.takeIf { hypot(it.x - nx, it.y - ny) <= 72f }
+
+        if (isInteractPressed) {
+            if (nearbyLoot != null && !state.aiBotEnabled) {
+                // Phase 4: Trigger Time-Freeze Loot Inspection Card
+                inspectedLootDrop = nearbyLoot
+                statusToast = "TIME-FREEZE LOOT INSPECT: ${nearbyLoot.displayTitle}"
+            } else if (nearby != null) {
+                when (nearby.kind) {
+                    StationKind.DEBRIS_DOOR -> {
+                        if (points >= nearby.cost && nearby.targetRoomIndex !in unlockedRooms) {
+                            points -= nearby.cost
+                            unlockedRooms = unlockedRooms + nearby.targetRoomIndex
+                            stations.removeAll { it.id == nearby.id }
+                            statusToast = "UNLOCKED ${mazeSyncedMap.rooms.getOrNull(nearby.targetRoomIndex)?.name ?: "NEW SECTOR"}!"
+                            banners.add(FloatingBanner("SECTOR UNLOCKED!", nearby.x, nearby.y, 0xFFFFD166))
+                        }
+                    }
+                    StationKind.WALL_WEAPON -> {
+                        if (points >= nearby.cost) {
+                            points -= nearby.cost
+                            if (nearby.weaponId !in unlockedWeapons) {
+                                unlockedWeapons = unlockedWeapons + nearby.weaponId
+                            }
+                            currentWeaponIdx = unlockedWeapons.indexOf(nearby.weaponId).coerceAtLeast(0)
+                            val rolledMod = ModularWeaponGenerator.generateProceduralWeapon(
+                                seed = clockMs xor state.mapSeed,
+                                wave = wave,
+                                preferredBaseWeaponId = nearby.weaponId
+                            )
+                            modularInventory = modularInventory + (nearby.weaponId to rolledMod)
+                            equippedModular = rolledMod
+                            magAmmo[nearby.weaponId] = rolledMod.effectiveMagSize
+                            statusToast = "EQUIPPED MODULAR ${rolledMod.customTitle}!"
+                        }
+                    }
+                    StationKind.MYSTERY_BOX -> {
+                        if (points >= nearby.cost) {
+                            points -= nearby.cost
+                            val rolledMod = ModularWeaponGenerator.generateProceduralWeapon(
+                                seed = clockMs xor (points * 31L),
+                                wave = wave + 1,
+                                guaranteedMinRarity = LootRarity.RARE
+                            )
+                            if (rolledMod.baseWeaponId !in unlockedWeapons) {
+                                unlockedWeapons = unlockedWeapons + rolledMod.baseWeaponId
+                            }
+                            currentWeaponIdx = unlockedWeapons.indexOf(rolledMod.baseWeaponId).coerceAtLeast(0)
+                            modularInventory = modularInventory + (rolledMod.baseWeaponId to rolledMod)
+                            equippedModular = rolledMod
+                            magAmmo[rolledMod.baseWeaponId] = rolledMod.effectiveMagSize
+                            statusToast = "MYSTERY BOX ROLLED [${rolledMod.rarity.shortBadge}]: ${rolledMod.customTitle}!"
+                            banners.add(FloatingBanner("ROLLED ${rolledMod.rarity.shortBadge}!", nearby.x, nearby.y, rolledMod.rarity.colorHex))
+                        }
+                    }
+                    StationKind.PACK_A_PUNCH -> {
+                        val curWpn = state.currentWeapon
+                        val curLv = weaponLevels[curWpn.id] ?: 1
+                        if (points >= nearby.cost && curLv < 5) {
+                            points -= nearby.cost
+                            val nextLv = curLv + 1
+                            weaponLevels = weaponLevels + (curWpn.id to nextLv)
+                            magAmmo[curWpn.id] = state.currentMaxMagSize + 4
+                            statusToast = "PACK-A-PUNCHED ${curWpn.name} TO TIER $nextLv!"
+                            banners.add(FloatingBanner("${curWpn.shortCode} MK-$nextLv!", nearby.x, nearby.y, 0xFFB388FF))
+                        }
+                    }
+                    StationKind.PERK_MACHINE -> {
+                        val perk = nearby.perkType
+                        if (perk != null && perk !in activePerks && points >= nearby.cost) {
+                            points -= nearby.cost
+                            activePerks = activePerks + perk
+                            if (perk == PerkType.JUGGERNOG) {
+                                maxHp = 200
+                                hp = 200
+                            }
+                            statusToast = "PERK ACQUIRED: ${perk.displayName}!"
+                            banners.add(FloatingBanner("+${perk.shortTag}", nearby.x, nearby.y, perk.colorHex))
+                        }
+                    }
+                    StationKind.BARRICADE_WINDOW -> {
+                        val idx = stations.indexOfFirst { it.id == nearby.id }
+                        if (idx >= 0 && stations[idx].barricadePlanks < stations[idx].maxPlanks) {
+                            stations[idx] = stations[idx].copy(barricadePlanks = stations[idx].barricadePlanks + 1)
+                            points += 20
+                            banners.add(FloatingBanner("+20 REPAIR", nearby.x, nearby.y, 0xFF00FF66))
+                        }
+                    }
+                    StationKind.SIEGE_FABRICATOR -> {
+                        if (!siegeState.isActive && points >= nearby.cost) {
+                            points -= nearby.cost
+                            siegeState = siegeState.copy(
+                                isActive = true,
+                                roomIndex = nearby.roomIndex,
+                                remainingMs = 20_000L,
+                                totalDurationMs = 20_000L
+                            )
+                            statusToast = "SIEGE FABRICATOR ACTIVATED (20s) — Camera framing widened to 1.1x!"
+                            banners.add(FloatingBanner("SIEGE STARTED!", nearby.x, nearby.y, 0xFFFF2A54, 1500L))
+                        }
+                    }
+                    StationKind.UPGRADE_ANVIL -> {
+                        if (points >= nearby.cost || depthEscrow.abyssalScrap >= 30) {
+                            if (depthEscrow.abyssalScrap >= 30) {
+                                depthEscrow = depthEscrow.copy(
+                                    abyssalScrap = depthEscrow.abyssalScrap - 30,
+                                    totalAnvilUpgrades = depthEscrow.totalAnvilUpgrades + 1
+                                )
+                            } else {
+                                points -= nearby.cost
+                            }
+                            val tempered = equippedModular.copy(anvilUpgradeTier = equippedModular.anvilUpgradeTier + 1)
+                            equippedModular = tempered
+                            modularInventory = modularInventory + (tempered.baseWeaponId to tempered)
+                            statusToast = "ANVIL TEMPERED ${tempered.customTitle} TO +${tempered.anvilUpgradeTier}!"
+                            banners.add(FloatingBanner("ANVIL +${tempered.anvilUpgradeTier}!", nearby.x, nearby.y, 0xFFFFD166))
+                        }
+                    }
+                }
+            }
+        }
+
+        // PHASE 1: Step Dynamic Camera Tension Controller (2.2x Corridor <-> 1.1x Siege/Boss Cubic Tween)
+        val hasBossAnomaly = zombies.any { it.archetype == ZombieArchetype.DEVIL_BOSS }
+        val nearbyHostilesCount = zombies.count { hypot(it.x - nx, it.y - ny) <= 360f }
+        val updatedCameraTension = CameraTensionComponent.stepCameraTension(
+            current = state.cameraTension,
+            deltaMs = scaledDeltaMs,
+            isSiegeActive = siegeState.isActive,
+            hasBossAnomaly = hasBossAnomaly,
+            nearbyHostileCount = nearbyHostilesCount,
+            didFireThisTick = didFireThisTick
+        )
+
+        val updatedRooms = if (unlockedRooms != state.unlockedRooms) {
+            mazeSyncedMap.rooms.map { it.copy(isUnlocked = it.index in unlockedRooms) }
+        } else {
+            mazeSyncedMap.rooms
+        }
+
+        val updatedMap = mazeSyncedMap.copy(
+            rooms = updatedRooms,
+            stations = stations,
+            barrels = barrels
+        )
+
+        return state.copy(
+            map = updatedMap,
+            unlockedRooms = unlockedRooms,
+            playerX = nx,
+            playerY = ny,
+            playerVelX = curVelX,
+            playerVelY = curVelY,
+            aimAngleRad = aimAngle,
+            hp = hp,
+            maxHp = maxHp,
+            shield = shield,
+            maxShield = maxShield,
+            wave = wave,
+            zombiesRemainingInWave = remainingToSpawn,
+            points = points,
+            totalKills = totalKills,
+            comboCount = comboCount,
+            comboTimerMs = comboTimerMs,
+            unlockedWeaponIds = unlockedWeapons,
+            weaponLevels = weaponLevels,
+            currentWeaponIndex = currentWeaponIdx,
+            currentMagAmmo = magAmmo,
+            reloadRemainingMs = reloadRemainingMs,
+            ammoTelemetry = telemetry,
+            activePerks = activePerks,
+            zombies = zombies,
+            tracers = tracers,
+            particles = particles,
+            floatingBanners = banners,
+            nearbyStation = nearby,
+            cameraTension = updatedCameraTension,
+            mazeState = updatedMazeState,
+            fortifications = fortifications,
+            laserTelegraphs = laserTelegraphs,
+            enemyProjectiles = enemyProjectiles,
+            elementalPuddles = elementalPuddles,
+            siegeFabricator = siegeState,
+            equippedModularWeapon = equippedModular,
+            modularWeaponInventory = modularInventory,
+            lootDrops = lootDrops,
+            nearbyLootDrop = nearbyLoot,
+            inspectedLootDrop = inspectedLootDrop,
+            lightLockTargetId = lightLockTargetId,
+            depthEscrow = depthEscrow,
+            clockMs = clockMs,
+            isGameOver = isGameOver,
+            statusToast = statusToast
+        )
+    }
+
+    private fun maybeSpawnLootDrop(
+        zombie: ZombieEntity,
+        wave: Int,
+        lootDrops: MutableList<LootDropEntity>,
+        banners: MutableList<FloatingBanner>
+    ) {
+        if (lootDrops.size >= 10) return
+        val dropChance = when (zombie.archetype) {
+            ZombieArchetype.DEVIL_BOSS -> 1.0f
+            ZombieArchetype.ABYSSAL_WEAVER, ZombieArchetype.CALCIFIED_STALKER -> 0.28f
+            else -> 0.08f
+        }
+        if (Random.nextFloat() <= dropChance) {
+            val seed = clockMs xor (zombie.id * 7919L)
+            val minRarity = if (zombie.archetype == ZombieArchetype.DEVIL_BOSS) LootRarity.EPIC else null
+            if (Random.nextBoolean()) {
+                val wpn = ModularWeaponGenerator.generateProceduralWeapon(seed, wave, minRarity)
+                lootDrops.add(
+                    LootDropEntity(
+                        id = nextEntityId++,
+                        x = zombie.x,
+                        y = zombie.y,
+                        rarity = wpn.rarity,
+                        payloadKind = LootPayloadKind.MODULAR_WEAPON,
+                        weaponPayload = wpn,
+                        spawnedAtWave = wave
+                    )
+                )
+                banners.add(FloatingBanner("[${wpn.rarity.shortBadge}] WEAPON DROP!", zombie.x, zombie.y - 22f, wpn.rarity.colorHex, 1300L))
+            } else {
+                val arm = RpgArmorGenerator.generateProceduralArmorPiece(seed, wave, minRarity = minRarity)
+                lootDrops.add(
+                    LootDropEntity(
+                        id = nextEntityId++,
+                        x = zombie.x,
+                        y = zombie.y,
+                        rarity = arm.rarity,
+                        payloadKind = LootPayloadKind.RPG_ARMOR_PIECE,
+                        armorPayload = arm,
+                        spawnedAtWave = wave
+                    )
+                )
+                banners.add(FloatingBanner("[${arm.rarity.shortBadge}] ARMOR DROP!", zombie.x, zombie.y - 22f, arm.rarity.colorHex, 1300L))
+            }
+        }
+    }
+
+    fun spawnStressZombies(
+        state: GameSessionState,
+        count: Int,
+        archetype: ZombieArchetype = ZombieArchetype.SHAMBLER
+    ): GameSessionState {
+        val current = state.zombies.toMutableList()
+        val baseHp = (55 + state.wave * 24)
+        val zHp = (baseHp * archetype.hpMultiplier).toInt()
+        repeat(count.coerceIn(1, 250)) { i ->
+            val angle = (i * 0.35f)
+            val dist = 180f + (i % 6) * 42f
+            val zx = (state.playerX + cos(angle) * dist).coerceIn(120f, 4660f)
+            val zy = (state.playerY + sin(angle) * dist).coerceIn(120f, 2620f)
+            current.add(
+                ZombieEntity(
+                    id = nextEntityId++,
+                    archetype = archetype,
+                    x = zx,
+                    y = zy,
+                    hp = zHp,
+                    maxHp = zHp
+                )
+            )
+        }
+        return state.copy(
+            zombies = current,
+            statusToast = "KONSOLE SPAWNED $count ${archetype.label.uppercase()}S (ACTIVE: ${current.size})"
+        )
+    }
+
+    fun runHeadlessBenchmark(
+        initialState: GameSessionState,
+        spawnZombieCount: Int,
+        ticks: Int
+    ): Pair<GameSessionState, BenchmarkReport> {
+        val safeTicks = ticks.coerceIn(10, 2000)
+        var simState = spawnStressZombies(
+            initialState.copy(aiBotEnabled = true, isPaused = false, isGameOver = false, inspectedLootDrop = null),
+            spawnZombieCount.coerceIn(1, 250),
+            ZombieArchetype.SPRINTER
+        )
+        val startKills = simState.totalKills
+        var peakZombies = simState.zombies.size
+
+        val elapsedNanos = measureNanoTime {
+            repeat(safeTicks) {
+                simState = stepFrame(
+                    state = simState,
+                    deltaMsRaw = 16L,
+                    moveXInput = 0f,
+                    moveYInput = 0f,
+                    isFiringInput = false,
+                    isAltBarrelDropInput = false,
+                    isInteractPressedInput = false,
+                    coopPeerX = null,
+                    coopPeerY = null
+                )
+                if (simState.zombies.size > peakZombies) {
+                    peakZombies = simState.zombies.size
+                }
+            }
+        }
+        val elapsedMs = elapsedNanos / 1_000_000.0
+        val avgMicros = (elapsedNanos / 1_000.0) / safeTicks
+        val maxFps = if (avgMicros > 0) (1_000_000.0 / avgMicros).toInt().coerceAtMost(9999) else 9999
+        val report = BenchmarkReport(
+            ticksSimulated = safeTicks,
+            zombieCountPeak = peakZombies,
+            totalElapsedMs = elapsedMs,
+            avgTickMicros = avgMicros,
+            estimatedMaxFps = maxFps,
+            killsDuringTest = simState.totalKills - startKills
+        )
+        return simState.copy(
+            statusToast = "STRESS BENCHMARK: $safeTicks ticks in ${"%.1f".format(elapsedMs)}ms (${"%.1f".format(avgMicros)}µs/tick, ~$maxFps FPS cap)"
+        ) to report
+    }
+
+    private fun triggerBarrelExplosion(
+        bx: Float,
+        by: Float,
+        zombies: MutableList<ZombieEntity>,
+        particles: MutableList<ParticleBurst>,
+        banners: MutableList<FloatingBanner>,
+        radius: Float = 140f,
+        damage: Int = 260
+    ): Pair<Int, Int> {
+        var kills = 0
+        var pts = 0
+        if (particles.size < 140) {
+            repeat(12) {
+                particles.add(
+                    ParticleBurst(
+                        x = bx,
+                        y = by,
+                        vx = Random.nextInt(-220, 220).toFloat(),
+                        vy = Random.nextInt(-220, 220).toFloat(),
+                        colorHex = if (it % 2 == 0) 0xFFFF2A54 else 0xFFFFD166,
+                        ttlMs = 420L
+                    )
+                )
+            }
+        }
+        banners.add(FloatingBanner("KABOOM!", bx, by - 20f, 0xFFFFD166))
+        for (z in zombies) {
+            if (hypot(z.x - bx, z.y - by) <= radius) {
+                z.hp -= damage
+                if (z.hp <= 0) {
+                    kills++
+                    pts += z.archetype.rewardPoints
+                }
+            }
+        }
+        return kills to pts
+    }
+
+    private fun isWalkable(x: Float, y: Float, map: ProceduralMap, unlockedRooms: Set<Int>): Boolean {
+        val rooms = map.rooms
+        val roomCount = rooms.size
+        var inUnlockedArea = false
+        for (i in 0 until roomCount) {
+            val room = rooms[i]
+            val idx = room.index
+            if (idx !in unlockedRooms) continue
+            val b = room.bounds
+
+            // Allow seamless crossing across shared walls when the adjacent room is also unlocked
+            val openLeft = (idx == 1 && 0 in unlockedRooms) || (idx == 4 && 1 in unlockedRooms) ||
+                (idx == 3 && 2 in unlockedRooms) || (idx == 5 && 3 in unlockedRooms)
+            val openRight = (idx == 0 && 1 in unlockedRooms) || (idx == 1 && 4 in unlockedRooms) ||
+                (idx == 2 && 3 in unlockedRooms) || (idx == 3 && 5 in unlockedRooms)
+            val openTop = (idx == 0 && 2 in unlockedRooms) || (idx == 1 && 3 in unlockedRooms) ||
+                (idx == 4 && 5 in unlockedRooms)
+            val openBottom = (idx == 2 && 0 in unlockedRooms) || (idx == 3 && 1 in unlockedRooms) ||
+                (idx == 5 && 4 in unlockedRooms)
+
+            val minX = if (openLeft) b.left - 4f else b.left + 22f
+            val maxX = if (openRight) b.right + 4f else b.right - 22f
+            val minY = if (openTop) b.top - 4f else b.top + 22f
+            val maxY = if (openBottom) b.bottom + 4f else b.bottom - 22f
+
+            if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+                inUnlockedArea = true
+                break
+            }
+        }
+        if (!inUnlockedArea) return false
+
+        // Collide with jagged perimeter rock/ruin outcroppings
+        val outcrops = map.jaggedPerimeterOutcrops
+        for (i in 0 until outcrops.size) {
+            val oc = outcrops[i].bounds
+            if (x >= oc.left - 6f && x <= oc.right + 6f && y >= oc.top - 6f && y <= oc.bottom + 6f) {
+                return false
+            }
+        }
+
+        val obstacles = map.wallObstacles
+        for (i in 0 until obstacles.size) {
+            val p = obstacles[i]
+            if (x >= p.left - 12f && x <= p.right + 12f && y >= p.top - 12f && y <= p.bottom + 12f) {
+                return false
+            }
+        }
+
+        // Deep lake water blocks walking unless crossing the lake's wooden plank footbridge
+        val lakes = map.lakes
+        for (i in 0 until lakes.size) {
+            val lake = lakes[i]
+            val rx = (lake.radiusX * 0.85f).coerceAtLeast(10f)
+            val ry = (lake.radiusY * 0.85f).coerceAtLeast(10f)
+            val nxLake = (x - lake.x) / rx
+            val nyLake = (y - lake.y) / ry
+            if (nxLake * nxLake + nyLake * nyLake < 1.0f) {
+                val onFootbridge = if (lake.bridgeHorizontal) {
+                    abs(y - lake.y) <= 28f
+                } else {
+                    abs(x - lake.x) <= 28f
+                }
+                if (!onFootbridge) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private fun pointToSegmentDistance(px: Float, py: Float, x1: Float, y1: Float, x2: Float, y2: Float): Float {
+        val dx = x2 - x1
+        val dy = y2 - y1
+        val lenSq = dx * dx + dy * dy
+        if (lenSq == 0f) return hypot(px - x1, py - y1)
+        val t = (((px - x1) * dx + (py - y1) * dy) / lenSq).coerceIn(0f, 1f)
+        val projX = x1 + t * dx
+        val projY = y1 + t * dy
+        return hypot(px - projX, py - projY)
+    }
+}
