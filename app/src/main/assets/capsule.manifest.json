@@ -15,6 +15,23 @@
     "phosphor-amber",
     "cryo-cyan"
   ],
+  "zt9_comfort_overrides": {
+    "default_family_arcade_mode": true,
+    "enforce_for_trust_ring_le": 2,
+    "enemy_label": "Cardboard Critters / Neon Arcade Bots",
+    "elimination_label": "Confetti KOs",
+    "revive_label": "Tag-Team Rescue",
+    "hearth_key_label": "Hearth Key (Instant Family Pass)",
+    "save_vault_label": "Time-Machine Memory Vaults",
+    "curfew_label": "Starlight Quiet Hours (Rest & Recharge Time)",
+    "economy_label": "Starlight Rupees & Wonder Relics"
+  },
+  "sanctuary_storyteller": {
+    "default_book_key": "cb64f9e7",
+    "library_endpoint": "/api/lfs/openaudible/library",
+    "stream_endpoint_template": "/api/lfs/openaudible/stream/[key]",
+    "sleep_fade_timers_min": [15, 30, 45]
+  },
   "mod_tunables": [
     {
       "key": "clockMultiplier",

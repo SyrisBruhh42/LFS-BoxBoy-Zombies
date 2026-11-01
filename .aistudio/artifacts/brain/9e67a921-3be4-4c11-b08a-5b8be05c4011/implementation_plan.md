@@ -1,104 +1,105 @@
-# LFS: BoxBoy Zombies — Oasis Aegis Suite (`v2.0.0 / CP-12`), Tailscale Mesh & TrashArcade Bridge
+# LFS Oasis Imagineering Translator, Persistent Shell Ribbon & Sanctuary Storyteller (`v2.0.0 / CP-12`)
 
-Upgrade `LFS: BoxBoy Zombies` with full production integration for the **LFS Oasis Aegis Suite (`v2.0.0 / CP-12`)**, **Zero-Trust Tailscale Mesh (`tail420c4d.ts.net` / `lfs-prod.tail420c4d.ts.net` / `100.106.12.104:13379`)**, **exact `U2` and `U3` server route contracts**, **TrashArcade Launcher Deep-Link & Cross-Game Asset Bridge (`lfs-local-abac-v1`)**, **6-Gate `aegisEnvelopeV1` 20-Slot SaveLab custody**, and **Stage 6 `G2_RATCHET_ZERO_EMOJI_AND_HOME_LEAK` source hygiene**.
+This upgrade completes the **LFS Oasis "Disney Imagineering Engagement Translator" (Grade <= 8.0)** across `LFS: BoxBoy Zombies`, embeds a persistent **Oasis Universal Shell Ribbon (`OasisMultiplayerBar`)** with `Shift+Tab` / `Ctrl+K` overlay pause-and-chat and 1-click Wing switching, and integrates the **AudioBookshelf & OpenAudible Sanctuary Storyteller (`cb64f9e7`)** pill with a 15m/30m/45m Starlight Sleep-Fade timer and procedural lullaby fallback.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All Phase 1 clarifications have been confirmed and synthesized into this plan:
+> The following architectural and UX choices incorporate your confirmed answers from our planning check:
 
-- **Confirmed Decision 1 — Best-of-All-3 Tailscale Anchor Handshake Strategy**:
-  - `probeTailscaleAnchorHandshake()` combines all three strategies: it monitors `NetworkHealthService` for active Tailscale/VPN interfaces, races the HTTPS Anchor (`https://lfs-prod.tail420c4d.ts.net/lfs-sso/handshake`) and direct Tailscale IP (`http://100.106.12.104:13379/lfs-sso/handshake`) with a `<= 1500ms` timeout, falls back sequentially if one transport is blocked, and synthesizes deterministic `Node.StableID` (`replicaId`), `subuserId`, `persona`, `trustRing`, and 4-Pillar `[PASS]`/`[WARN]` checks when offline.
-- **Confirmed Decision 2 — Best-of-All-3 Relic & 6-Gate `aegisEnvelopeV1` Custody Sync**:
-  - Cross-game `lfs-local-abac-v1` relics and 20-slot `aegisEnvelopeV1` saves are dual-written immediately to the local vault on milestone/save trigger, pushed asynchronously to `U2` / Tailscale Anchor custody (`POST /api/lfs/sync/saves`), and automatically flushed at wave completion or when joining an active Oasis room.
-- **Confirmed Decision 3 — Zero-Emoji Source Hygiene (`G2_RATCHET_ZERO_EMOJI_AND_HOME_LEAK`)**:
-  - Replace all raw non-ASCII symbols, stars, and emoji glyphs across Kotlin source files with Kotlin Unicode escape sequences (such as `\u2605`) or clean ASCII badges (`[PASS]`, `[WARN]`, `[TIER-5]`) so automated sovereignty ratchets pass with zero raw emoji hits.
+- **Confirmed Decision 1 — `zt9_comfort_overrides` Family-Friendly Arcade Mode ("Best Of All")**:
+  - Enabled by default for an all-ages (Ring 1 Child through Ring 3 Owner) experience, automatically enforced when the active subuser's Trust Ring is Ring 1 or Ring 2, and manually toggleable by Ring 3/4 players between **"Family Arcade Mode"** (*Cardboard Critters, Neon Arcade Bots, Confetti KOs, Tag-Team Rescue*) and **"Classic Tactical Labels"** while keeping all underlying JSON/API schema keys untouched.
+- **Confirmed Decision 2 — Wing Switcher & TrashArcade Hall Navigation ("Deep-link to Oasis Hub plus in-app Wing preview sheet")**:
+  - Selecting any destination from the persistent top ribbon (`TrashArcade Hall`, `Commonplace Wing I`, `Scriptorium Wing II`, `Chapterhouse Wing III`, `3D Vigil Wing IV`, `Code Runner`, `Boxhead Fort`, `BoxBoy Defense`) opens an instant in-app **Oasis Wing Portal Card** (preserving the live `OASIS-XXXX` / `LFS-XXXXXX` party room and 16-Channel Rmblyn Family Chat) with a 1-click deep-link/Intent launch button and WebSocket `oasis:wing-switch` event dispatch.
+- **Confirmed Decision 3 — Sanctuary Storyteller (`cb64f9e7`) Audio Engine ("Stream from Oasis OpenAudible API with procedural lullaby fallback")**:
+  - Queries `/api/lfs/openaudible/library` and streams `/api/lfs/openaudible/stream/[key]` authenticated via the Tailscale `:13379/lfs-sso/handshake` Hearth Key identity, and automatically falls back to a warm, low-latency **Procedural Crystalline Music-Box Lullaby Synthesizer** (`AudioTrack` 16-bit PCM) whenever offline or unreachable, complete with a smooth 15m / 30m / 45m **Starlight Sleep-Fade** volume attenuator.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Connects `LFS: BoxBoy Zombies` to the sovereign `Lewisfamilysystems` infrastructure across `U1` (Android / TrashArcade Hub), `U2` (`play.lewisfamilysystems.com` & `lfs-prod.tail420c4d.ts.net`), and `U3` (`:19448` `oasis_server_hoster.py` & `Laputa` `100.115.219.120:19448`), while enforcing formal ABAC security, deterministic LWW state convergence, 6-Gate `aegisEnvelopeV1` save custody, and cross-game progression with `willow-desktop-pet`, `undercity-crawler`, and `lfs-tycoon`.
-- **Target Audience / Persona**: Players and operators within the `Lewisfamilysystems` Oasis ecosystem launching `LFS: BoxBoy Zombies` standalone or via the **TrashArcade** hub across Android handhelds, TV cast setups, and Tailscale-meshed workstations.
-- **Key Value**: Guarantees sub-1500ms non-blocking 3-tier networking with exact `U2`/`U3` wire compatibility, mathematically verified access/conflict resolution, and cross-capsule relic/rupee continuity.
+- **What It Does**:
+  1. **Disney Imagineering Engagement Translator (Grade <= 8.0)**: Replaces intimidating cryptographic, network, and grim combat terminology in the UI with warm, inviting, family-friendly Oasis language while keeping all wire-level API and JSON keys intact:
+     - Tailscale Auto-SSO (`Node.StableID`) -> **"Hearth Key (Instant Family Pass)"**
+     - `aegisEnvelopeV1` AES-256-GCM Save Slots -> **"Time-Machine Memory Vaults"**
+     - `HOST_LOCAL_PC` / `HOST_LOCAL_DEVICE` & `LAUNCH_U2_HOSTING_SERVICE` -> **"Host From My Desk"** & **"Open a Family Cloud Room"**
+     - `ZT-6` Error Banners -> **"Friendly Guide Cards"** structured into 4 clear steps: *1. What Happened*, *2. Why*, *3. Your Progress Is Safe*, and *4. One-Click Next Step*
+     - `Z_1440` Curfew -> **"Starlight Quiet Hours (Rest & Recharge Time)"**
+     - TrashArcade CMY Rupees & Assets -> **"Starlight Rupees & Wonder Relics"**
+     - `zt9_comfort_overrides` Family-Friendly Arcade Mode -> Frames opponents and knockouts as **"Cardboard Critters / Neon Arcade Bots"**, **"Confetti KOs"**, and **"Tag-Team Rescue"**.
+  2. **Uninterrupted Top Shell Ribbon (`OasisMultiplayerBar`) & `Shift+Tab` / `Ctrl+K` Overlay**:
+     - Remains mounted at the top of the screen across Title Hub, active gameplay, modals, and Wing switches without ever dropping the active party room or 16-Channel Rmblyn Family Chat (`@willow`, `@cinder`, `@mote`).
+     - Listens for and dispatches `oasis:overlay-toggle` (`Shift+Tab` or `Ctrl+K` on hardware keyboards, plus a 1-tap ribbon pill) so single-player action physics pause cleanly while family chat, Wing navigation, and menus stay live.
+  3. **Sanctuary Storyteller Pill (`cb64f9e7`)**:
+     - Compact, always-accessible audio player pill embedded in the top shell ribbon displaying Play/Pause, active book & chapter title, and a **15m / 30m / 45m Starlight Sleep-Fade timer**.
+- **Target Audience / Persona**: Multi-generational families (Ring 1 kids to Ring 3 parents/owners) playing together across Android handhelds, TV Cast, and the LFS Oasis Mesh.
+- **Key Value**: Combines zero-trust security and 6-Gate save durability with warm, approachable Disney-grade storytelling and uninterrupted family co-op presence.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **TrashArcade Deep-Link Launch Intake**: When launched via Android `Intent` extras or URI query parameters (`oasis_room_code`, `oasis_host_mode`, `oasis_subuser_id`, `oasis_display_name`, `oasis_lds_theme`, `oasis_autostart`), the app automatically configures the squad room code, host mode, subuser identity, and theme, and transitions straight into the bunker survival run when `oasis_autostart = true`.
-  2. **Tailscale 4-Pillar Handshake & ABAC Status Inspector**: Opening the **Multiplayer & Oasis Sync** modal displays the live **TrashArcade Satchel & Tailscale 4-Pillar Status** card with Machado CVD-safe `[PASS]` / `[WARN]` badges for `tailscale_tunnel`, `abac_perimeter`, `isolated_profile`, and `user_data_backup`, plus the active `Node.StableID` (`replicaId`), `trustRing`, and 32-State ABAC Lattice bitmask.
-  3. **CMY Rupee Satchel & Cross-Game Relic Unlocks**: As players earn Survival Points, defeat bosses, survive Wave 5 in Abyssal Bio-Noir lighting, upgrade weapons at the Pack-a-Punch, or revive squadmates, the satchel decomposes their balance into the 9 canonical CMY gem denominations (`<= 24` static sprites) and unlocks the 4 cross-game `lfs-local-abac-v1` relics.
-  4. **6-Gate `aegisEnvelopeV1` 20-Slot SaveLab**: Saving a run seals the state into a 6-Gate `aegisEnvelopeV1` payload (`G1_MAGIC_HEADER` through `G6_NON_EMPTY_STATE`) and commits it to local storage, Google Drive, and Oasis SaveLab custody (`slot_01`..`slot_20`).
+  - **Persistent Top Shell Ribbon**: Always visible at the very top of the viewport. Shows the active **Party Room Pill** (`OASIS-XXXX` / `LFS-XXXXXX`), **Hearth Key Badge**, **Sanctuary Storyteller Pill (`cb64f9e7`)**, **16-Channel Rmblyn Family Chat Toggle** (`Shift+Tab`), and **Switch Wing / TrashArcade Hall** selector.
+  - **`Shift+Tab` / `Ctrl+K` Universal Overlay**: Pressing `Shift+Tab` or `Ctrl+K` (or tapping the Ribbon Overlay button) pauses single-player physics immediately and slides open the **Oasis Universal Overlay** containing live Rmblyn Family Chat (`@willow`, `@cinder`, `@mote`), Wing Switcher cards, Family Arcade Mode comfort toggle, and Friendly Guide status.
+  - **Friendly Guide Cards (`ZT-6`)**: Whenever a network failover, curfew check, or save sync notice occurs, a warm card reassures the player with:
+    1. *What Happened*
+    2. *Why*
+    3. *Your Progress Is Safe*
+    4. *One-Click Next Step*
 - **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Final Fantasy Crystalline Astral Command paired with Machado CVD-safe status badges (`[PASS]`, `[WARN]`) and full support for the 7 LDS theme packs (`evergreen-dark`, `evergreen-light`, `high-contrast`, `calm`, `dusk`, `amber-terminal`, `cobalt-deck`).
-  - *Color Palette & Mood*: Valisthea Obsidian (`--background: #070A14`), Astral Navy (`--surface: #0F1629`), Aether Cyan (`--primary: #38E8FF`), Brushed Champagne Gold (`--secondary: #F5C469`), Materia Violet (`--tertiary: #B784FF`), and high-visibility WCAG AAA contrast mode.
-  - *Typography & Hierarchy*: Engraved `Cinzel` serif display headers paired with `Plus Jakarta Sans` UI controls and tabular telemetry readouts.
+  - **Aesthetic Direction**: Warm Astral Sanctuary & Final Fantasy Crystalline polish (`AstralObsidian`, `ChampagneGold`, `AetherCyan`, `PhosphorGreen`, and WCAG AAA High-Contrast support).
+  - **Typography & Hierarchy**: Clean, scannable Grade <= 8.0 labels using `CinzelDisplayFamily` for headers and `RajdhaniBodyFamily` / `ShareTechMonoFamily` for badges and timers.
+  - **Ratchet Hygiene**: Strictly `0` raw Unicode emoji characters in `.kt` files (all icons use Material Vector icons or escaped ASCII badges like `[PASS]`, `[WARN]`, `[SAFE]`) and `0` `/home/` path leaks.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Automatic `U2` vs. `U3` Endpoint Route Dispatch**
-  - *Chosen Approach*: Inspect each candidate base URL during Happy-Eyeballs racing and room/hoster operations: endpoints targeting `:19448` (`U3` Local / `Laputa` Hoster) automatically dispatch to `/v1/hoster/rooms`, `/v1/hoster/migrate`, `/v1/hoster/wake`, `/v1/hoster/join`, `/v1/hoster/status`, and `/v1/overlay/rmblyn`, while endpoints targeting `U2` (`play.lewisfamilysystems.com` or `lfs-prod.tail420c4d.ts.net`) dispatch to `/api/lfs/sync/rooms`, `/api/lfs/sync/hoster`, `/api/lfs/sync/state`, `/api/lfs/sync/events`, `/api/lfs/sync/presence`, `/api/lfs/sync/rmblyn`, and `/api/lfs/sync/saves`.
-  - *Why*: Ensures zero protocol mismatches whether the player connects to a local/Tailscale `:19448` Python hoster daemon or the global `U2` Sovereign Web Platform.
-- **Decision 2: Strict 4-Layer HTTP Request Gate Compliance**
-  - *Chosen Approach*: Every mutating `POST` request explicitly sets `Content-Type: application/json; charset=utf-8` and includes canonical Oasis protocol headers so the server's 4-Layer HTTP Request Gate (`415` JSON Content-Type check, Host allowlist, Origin check, and `tailscaled.sock` peer identity) succeeds deterministically.
-- **Decision 3: Deterministic Formal Math Primitives on `Companion`**
-  - *Chosen Approach*: Implement `isWithinCurfewZ1440`, `evaluateAbac32Lattice`, `resolveTotalOrderLww`, and `decomposeCmyRupees` as pure, deterministic functions exposed on `OasisHostedServerClient.Companion` alongside `sealSixGateAegisEnvelopeV1` / `unsealSixGateAegisEnvelopeV1` on `CryptoSyncEngine`.
-  - *Why*: Guarantees bit-exact behavior across JVM unit tests and live Android runtime without external dependencies.
+- **Decision 1 — Dual-Layer Vocabulary (Imagineering UI Layer over Canonical Wire Layer)**:
+  - *Chosen Approach*: Keep all wire/schema keys (`Node.StableID`, `aegisEnvelopeV1`, `HOST_LOCAL_DEVICE`, `LAUNCH_U2_HOSTING_SERVICE`, `zt9_comfort_overrides`, `lfs-local-abac-v1`) 100% intact in JSON payloads and unit-tested data models while mapping user-facing titles, subtitles, and HUD callouts through an `OasisImagineeringTranslator`.
+  - *Why*: Guarantees full backward compatibility with `U2`/`U3` servers and existing unit tests while delivering a Grade <= 8.0 family-friendly UI.
+- **Decision 2 — Persistent Top Shell Ribbon Outside Modal Destruction**:
+  - *Chosen Approach*: Mount `OasisMultiplayerBar` at the top of `GameScreen` (and mirrored in `TitleHub` header) backed by `BoxBoyViewModel` state so opening/closing dialogs, switching Wings, or toggling `Shift+Tab` never disconnects the WebSocket or resets Rmblyn chat history.
+  - *Why*: Ensures uninterrupted squad communication and audio playback across every screen state.
+- **Decision 3 — Hybrid OpenAudible Stream + Procedural Music-Box Lullaby Fallback**:
+  - *Chosen Approach*: `SanctuaryStorytellerController` queries `/api/lfs/openaudible/library` and `/api/lfs/openaudible/stream/[key]` with the Tailscale `:13379/lfs-sso/handshake` Hearth Key header, and seamlessly synthesizes soothing multi-chapter music-box arpeggios via `AudioTrack` PCM when offline, with real-time linear/cosine sleep-fade gain attenuation over 15m, 30m, or 45m.
+  - *Why*: Works on live Oasis home servers and 100% offline flights or bedtime sessions without bundling large binary audio files.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
-### Architecture & Component Diagram
-
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                TrashArcade / Android Intent Deep-Link Intake                 │
-│  • oasis_room_code, oasis_host_mode, oasis_subuser_id, oasis_display_name    │
-│  • oasis_lds_theme (7 LDS themes), oasis_autostart -> BoxBoyViewModel        │
-└──────────────────────────────────────┬───────────────────────────────────────┘
-                                       ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                 BoxBoyViewModel & Cross-Game Asset Bridge                    │
-│  ┌────────────────────────────────────┐ ┌──────────────────────────────────┐ │
-│  │ CMY Rupee Satchel Decomposer       │ │ lfs-local-abac-v1 Relic Bridge   │ │
-│  │ • 9 denominations [1000..1]        │ │ • charm_valkor9_brass_collar     │ │
-│  │ • Bounded <= 24 static sprites     │ │ • undercity-delver-torch         │ │
-│  │ • POUCH_TIER_1..ASTRAL_CHEST_TIER_4│ │ • crucible-atomic-signet         │ │
-│  └─────────────────┬──────────────────┘ │ • willow-visor-emerald           │ │
-│                    └─────────┬──────────┴─────────────────┬────────────────┘ │
-└──────────────────────────────┼────────────────────────────┼──────────────────┘
-                               ▼                            ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│               OasisHostedServerClient & CryptoSyncEngine                     │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │ Formal Verification & 6-Gate SaveLab Core                              │  │
-│  │ • Z_1440 Curfew Modulo • 32-State ABAC Lattice • Total Order LWW       │  │
-│  │ • sealSixGateAegisEnvelopeV1 / unsealSixGateAegisEnvelopeV1 (20 slots) │  │
-│  └───────────┬────────────────────────────────────────────┬───────────────┘  │
-│              ▼                                            ▼                  │
-│  ┌───────────────────────────────────┐  ┌─────────────────────────────────┐  │
-│  │ U2 Sovereign Web & Tailscale      │  │ U3 Local & Laputa Hoster (:19448│  │
-│  │ • play.lewisfamilysystems.com     │  │ • 127.0.0.1 / 100.115.219.120   │  │
-│  │ • lfs-prod.tail420c4d.ts.net      │  │ • POST /v1/hoster/rooms,migrate │  │
-│  │ • 100.106.12.104:13379/lfs-sso    │  │ • POST /v1/hoster/wake,join     │  │
-│  │ • /api/lfs/sync/{rooms,state,...} │  │ • GET /v1/hoster/status         │  │
-│  └───────────────────────────────────┘  └─────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                   PERSISTENT OASIS UNIVERSAL SHELL RIBBON                  │
+│  [Party: OASIS-XXXX] [Hearth Key] [Sanctuary Storyteller cb64f9e7] [Wings] │
+└───────────────┬──────────────────────────────┬─────────────────────────────┘
+                │ Shift+Tab / Ctrl+K           │ Play / Pause / Sleep-Fade
+                ▼                              ▼
+┌───────────────────────────────────┐  ┌─────────────────────────────────────┐
+│   OasisUniversalOverlaySheet      │  │ SanctuaryStorytellerController      │
+│ • Pauses 1P Physics cleanly       │  │ • GET /api/lfs/openaudible/library  │
+│ • 16-Ch Rmblyn Chat (@willow...)  │  │ • GET /api/lfs/openaudible/stream/* │
+│ • Wing Switcher & Hub Deep-Link   │  │ • 16-bit PCM Music-Box Fallback     │
+│ • ZT-6 Friendly Guide Cards       │  │ • 15m / 30m / 45m Sleep-Fade Timer  │
+└───────────────┬───────────────────┘  └─────────────────────────────────────┘
+                │
+                ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│           Disney Imagineering Engagement Translator & ZT-9 Comfort         │
+│ • Hearth Key (Instant Family Pass)   • Time-Machine Memory Vaults          │
+│ • Host From My Desk / Family Cloud   • Starlight Quiet Hours (Z_1440)      │
+│ • Starlight Rupees & Wonder Relics   • Cardboard Critters & Confetti KOs   │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Interactive Component & State Mapping
-
-- **4-Pillar Tailscale Auto-SSO Handshake (`probeTailscaleAnchorHandshake`)**:
-  - Races `GET https://lfs-prod.tail420c4d.ts.net/lfs-sso/handshake` and `GET http://100.106.12.104:13379/lfs-sso/handshake` (`<= 1500ms` timeout) with sequential fallback and `NetworkHealthService` Tailscale interface correlation.
-  - Updates `TailscaleSsoHandshakeState` (`stableNodeId`, `subuserId`, `persona`, `trustRing`, `generationEpoch`, and the 4 `[PASS]`/`[WARN]` pillar checks: `tailscale_tunnel`, `abac_perimeter`, `isolated_profile`, `user_data_backup`).
-- **`U2` & `U3` Route Dispatcher**:
-  - Automatically detects `:19448` (`U3`) vs. `U2` / Anchor endpoints and formats requests/responses with `Content-Type: application/json; charset=utf-8` for room creation, `<300ms` host migration, `<500ms` wake, rate-limited join, CRDT state delta push, event polling, presence heartbeats, and 16-channel `Rmblyn` wave challenge cards.
-- **6-Gate `aegisEnvelopeV1` SaveLab (`commitSaveToOasisCustody`)**:
-  - Seals any `GameSaveSnapshot` with `G1_MAGIC_HEADER` (`AEGISENV`), `G2_SCHEMA_VERSION` (`aegisEnvelopeV1`), `G3_SHA256_INTEGRITY`, `G4_MONOTONIC_GENERATION`, `G5_AAD_BINDING`, and `G6_NON_EMPTY_STATE`, storing locally and posting to `POST /api/lfs/sync/saves` across `slot_01`..`slot_20`.
-- **Stage 6 Zero-Emoji Ratchet & `capsule.manifest.json` (`cp12`)**:
-  - Sanitizes all Kotlin source strings to use Unicode escapes (`\u2605`) or ASCII badges and ships `capsule.manifest.json` (`schema_version: "cp12"`) at root and in Android assets.
+- **Data Model & State**:
+  - `Zt9ComfortOverridesState`: Holds `familyFriendlyArcadeMode: Boolean = true`, `autoEnforceForChildRings: Boolean = true`, and helper methods translating enemy names (*Cardboard Critters / Neon Arcade Bots*), KO toasts (*Confetti KOs*), and revive prompts (*Tag-Team Rescue*).
+  - `FriendlyGuideCardState`: Models `ZT-6` alerts with `whatHappened`, `whyItHappened`, `progressIsSafe`, and `nextStepLabel` + action callback.
+  - `OasisWingDestination`: Enum covering `TRASH_ARCADE_HALL`, `COMMONPLACE_WING_I`, `SCRIPTORIUM_WING_II`, `CHAPTERHOUSE_WING_III`, `VIGIL_3D_WING_IV`, `CODE_RUNNER`, `BOXHEAD_FORT`, and `BOXBOY_DEFENSE`.
+  - `SanctuaryStorytellerState`: Tracks `isPlaying`, `activeBookId` (`cb64f9e7`), `bookTitle`, `chapterTitle`, `sleepTimerMinutes` (`0`, `15`, `30`, `45`), `sleepRemainingSeconds`, `sleepFadeMultiplier`, and `sourceLabel` (`OpenAudible Sanctuary Stream` vs `Offline Starlight Music-Box`).
+- **Interactive Component & State Mapping**:
+  - Pressing `Shift+Tab` or `Ctrl+K` in `GameScreen` dispatches `viewModel.toggleOasisUniversalOverlay()`, which emits `oasis:overlay-toggle`, pauses single-player physics (`isPaused = true` when solo), and opens the overlay without dropping `oasisServerClient` or `p2pManager`.
+  - Selecting a Wing in `OasisMultiplayerBar` updates `selectedOasisWing`, sends an `oasis:wing-switch` event, and displays the in-app Wing preview & deep-link launcher card while keeping the active room connected.
+  - Toggling the Sanctuary Storyteller pill starts/pauses chapter audio and ticks the 15m/30m/45m Starlight Sleep-Fade countdown.
