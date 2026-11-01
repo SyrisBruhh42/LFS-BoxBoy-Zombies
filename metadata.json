@@ -1,0 +1,6 @@
+{
+  "name": "BoxBoy Zombies",
+  "description": "Retro emulator-styled 2D Boxhead & Black Ops Zombies tactical survival game with procedural rooms, custom gamepad overlay & key-mapping, P2P socket co-op, encrypted cross-device save sync, Cloud saves, and Gemini AI Tactical Director.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

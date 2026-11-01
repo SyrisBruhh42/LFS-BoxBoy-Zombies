@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "SaveSlot": {
+      "title": "SaveSlot",
+      "description": "Player progression, unlocked Boxhead weapons, wave records, and AES-GCM encrypted state payload synced across devices.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated owner UID matching request.auth.uid."
+        },
+        "slotName": {
+          "type": "string",
+          "description": "Display name of the save slot (e.g. Slot 1 - Bunker Run)."
+        },
+        "highestWave": {
+          "type": "integer",
+          "description": "Highest zombie survival wave reached in this save slot."
+        },
+        "totalKills": {
+          "type": "integer",
+          "description": "Cumulative zombie kills across runs in this save slot."
+        },
+        "points": {
+          "type": "integer",
+          "description": "Current banked survival points / mystery box credits."
+        },
+        "loadoutSummary": {
+          "type": "string",
+          "description": "Compact summary of unlocked weapons and Pack-a-Punch upgrades."
+        },
+        "encryptedPayload": {
+          "type": "string",
+          "description": "Base64 AES-GCM encrypted save state payload for P2P and cross-device restore."
+        },
+        "deviceTag": {
+          "type": "string",
+          "description": "Origin device identifier tag."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the save slot was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the save slot was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "slotName",
+        "highestWave",
+        "totalKills",
+        "points",
+        "loadoutSummary",
+        "encryptedPayload",
+        "deviceTag",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ControllerProfile": {
+      "title": "ControllerProfile",
+      "description": "MyBoy-inspired custom touch overlay layout and hardware gamepad key-mapping profile.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated owner UID matching request.auth.uid."
+        },
+        "profileName": {
+          "type": "string",
+          "description": "Name of the controller profile."
+        },
+        "dpadScale": {
+          "type": "integer",
+          "description": "On-screen D-Pad and button scale percentage (50 to 200)."
+        },
+        "buttonOpacity": {
+          "type": "integer",
+          "description": "On-screen gamepad overlay opacity percentage (10 to 100)."
+        },
+        "keyMapCode": {
+          "type": "string",
+          "description": "Serialized hardware keycode and touch overlay coordinate mapping."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "profileName",
+        "dpadScale",
+        "buttonOpacity",
+        "keyMapCode",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/save_slots/{slotId}": {
+      "schema": {
+        "$ref": "#/entities/SaveSlot"
+      },
+      "description": "Per-user cloud-synced save slots and encrypted game state snapshots."
+    },
+    "/users/{userId}/controller_profiles/{profileId}": {
+      "schema": {
+        "$ref": "#/entities/ControllerProfile"
+      },
+      "description": "Per-user MyBoy-style custom controller mappings and touch overlay presets."
+    }
+  }
+}

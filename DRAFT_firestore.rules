@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint: SaveSlot
+    function isValidSaveSlot(data) {
+      return data.keys().hasAll([
+               'userId', 'slotName', 'highestWave', 'totalKills', 'points',
+               'loadoutSummary', 'encryptedPayload', 'deviceTag', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'slotName', 'highestWave', 'totalKills', 'points',
+               'loadoutSummary', 'encryptedPayload', 'deviceTag', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.slotName is string && data.slotName.size() >= 1 && data.slotName.size() <= 60 &&
+             data.highestWave is int && data.highestWave >= 1 && data.highestWave <= 9999 &&
+             data.totalKills is int && data.totalKills >= 0 && data.totalKills <= 100000000 &&
+             data.points is int && data.points >= 0 && data.points <= 100000000 &&
+             data.loadoutSummary is string && data.loadoutSummary.size() >= 1 && data.loadoutSummary.size() <= 500 &&
+             data.encryptedPayload is string && data.encryptedPayload.size() >= 1 && data.encryptedPayload.size() <= 8000 &&
+             data.deviceTag is string && data.deviceTag.size() >= 1 && data.deviceTag.size() <= 80 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Validation Blueprint: ControllerProfile
+    function isValidControllerProfile(data) {
+      return data.keys().hasAll([
+               'userId', 'profileName', 'dpadScale', 'buttonOpacity',
+               'keyMapCode', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'profileName', 'dpadScale', 'buttonOpacity',
+               'keyMapCode', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.profileName is string && data.profileName.size() >= 1 && data.profileName.size() <= 50 &&
+             data.dpadScale is int && data.dpadScale >= 50 && data.dpadScale <= 200 &&
+             data.buttonOpacity is int && data.buttonOpacity >= 10 && data.buttonOpacity <= 100 &&
+             data.keyMapCode is string && data.keyMapCode.size() >= 1 && data.keyMapCode.size() <= 1000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/save_slots/{slotId} {
+      allow get: if isSignedIn() &&
+                    isValidId(userId) &&
+                    isValidId(slotId) &&
+                    request.auth.uid == userId &&
+                    existing().userId == request.auth.uid;
+
+      allow list: if isSignedIn() &&
+                     request.auth.uid == userId &&
+                     existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(slotId) &&
+                       request.auth.uid == userId &&
+                       isValidSaveSlot(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidSaveSlot(incoming()) &&
+                       isValidId(userId) &&
+                       isValidId(slotId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'slotName', 'highestWave', 'totalKills', 'points',
+                         'loadoutSummary', 'encryptedPayload', 'deviceTag', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(slotId) &&
+                       request.auth.uid == userId &&
+                       existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/controller_profiles/{profileId} {
+      allow get: if isSignedIn() &&
+                    isValidId(userId) &&
+                    isValidId(profileId) &&
+                    request.auth.uid == userId &&
+                    existing().userId == request.auth.uid;
+
+      allow list: if isSignedIn() &&
+                     request.auth.uid == userId &&
+                     existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(profileId) &&
+                       request.auth.uid == userId &&
+                       isValidControllerProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidControllerProfile(incoming()) &&
+                       isValidId(userId) &&
+                       isValidId(profileId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'profileName', 'dpadScale', 'buttonOpacity', 'keyMapCode', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidId(profileId) &&
+                       request.auth.uid == userId &&
+                       existing().userId == request.auth.uid;
+    }
+  }
+}
