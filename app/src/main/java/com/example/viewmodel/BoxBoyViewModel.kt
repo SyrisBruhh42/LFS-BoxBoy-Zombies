@@ -26,6 +26,8 @@ import com.example.data.OasisBotPersona
 import com.example.data.PerkType
 import com.example.data.SaveSlot
 import com.example.data.SyncTransportMode
+import com.example.data.TrashArcadeLaunchParams
+import com.example.data.TrashArcadeSharedRelic
 import com.example.game.ArmorRigState
 import com.example.game.ArmorSlot
 import com.example.game.BoxBoyGameEngine
@@ -198,6 +200,12 @@ class BoxBoyViewModel(
     private val _accountDeletionStatus = MutableStateFlow<String?>(null)
     val accountDeletionStatus: StateFlow<String?> = _accountDeletionStatus.asStateFlow()
 
+    private val _unlockedTrashArcadeRelics = MutableStateFlow<Set<String>>(emptySet())
+    val unlockedTrashArcadeRelics: StateFlow<Set<String>> = _unlockedTrashArcadeRelics.asStateFlow()
+
+    private val _trashArcadeLaunchParams = MutableStateFlow(TrashArcadeLaunchParams())
+    val trashArcadeLaunchParams: StateFlow<TrashArcadeLaunchParams> = _trashArcadeLaunchParams.asStateFlow()
+
     val driveSyncManager = DriveSyncManager(localPrefs = localPrefs)
     val driveSyncState: StateFlow<GoogleDriveSyncUiState> = driveSyncManager.syncState
 
@@ -324,7 +332,11 @@ class BoxBoyViewModel(
         loadOfflineSlotsFromPrefs()
         loadGamepadMappingFromPrefs()
         loadStoreSettingsAndCareerFromPrefs()
+        loadTrashArcadeRelicsFromPrefs()
         konsoleServer.startServer()
+        oasisServerClient.triggerTailscaleAnchorHandshakeAsync(
+            isTailscaleInterfaceDetected = networkHealth.value.isTailscaleActive || networkHealth.value.isPrivateNetworkDetected
+        )
     }
 
     // --- 60 FPS GAME LOOP TICK ---
@@ -460,7 +472,7 @@ class BoxBoyViewModel(
         val (updatedState, report) = engine.runHeadlessBenchmark(_gameState.value, zombieCount, ticks)
         _gameState.value = updatedState
         return "BENCHMARK COMPLETE: ${report.ticksSimulated} ticks @ ${report.zombieCountPeak} zombies | " +
-            "Total: ${"%.2f".format(report.totalElapsedMs)}ms | Avg: ${"%.1f".format(report.avgTickMicros)}µs/tick (~${report.estimatedMaxFps} FPS ceiling) | " +
+            "Total: ${"%.2f".format(report.totalElapsedMs)}ms | Avg: ${"%.1f".format(report.avgTickMicros)}us/tick (~${report.estimatedMaxFps} FPS ceiling) | " +
             "Bot Kills: ${report.killsDuringTest}"
     }
 
@@ -625,7 +637,7 @@ class BoxBoyViewModel(
                 remainingMs = 20_000L,
                 totalDurationMs = 20_000L
             ),
-            statusToast = "SIEGE FABRICATOR OVERDRIVE (20s) — Camera Tweening to 1.1x!"
+            statusToast = "SIEGE FABRICATOR OVERDRIVE (20s) -- Camera Tweening to 1.1x!"
         )
     }
 
@@ -1098,7 +1110,7 @@ class BoxBoyViewModel(
                 p2pManager.startHosting(_syncPassphrase.value)
             }
             _gameState.value = _gameState.value.copy(
-                statusToast = "LFS ROOM $cleanCode ONLINE (${hostMode.shortTitle} • Epoch #${oasisStatus.value.hostEpoch})"
+                statusToast = "LFS ROOM $cleanCode ONLINE (${hostMode.shortTitle} | Epoch #${oasisStatus.value.hostEpoch})"
             )
         }
     }
@@ -1181,13 +1193,19 @@ class BoxBoyViewModel(
                     deviceTag = snap.deviceTag
                 )
             }
+            val slotIndex = (_localOfflineSaves.value.size).coerceIn(1, 20)
+            oasisServerClient.commitSaveToOasisCustody(
+                slotKey = "slot_%02d".format(slotIndex),
+                snapshot = snap,
+                generation = snap.highestWave.coerceAtLeast(1)
+            )
         }
 
         _gameState.value = _gameState.value.copy(
             statusToast = if (isCloudAuthenticated) {
-                "CHRONICLE SAVED (Google Drive + Firestore + Local Vault): ${snap.slotName}"
+                "CHRONICLE SAVED (Google Drive + Firestore + Oasis 6-Gate Vault): ${snap.slotName}"
             } else {
-                "CHRONICLE SAVED (Google Drive Vault + Local AES-GCM): ${snap.slotName}"
+                "CHRONICLE SAVED (Google Drive + Oasis 6-Gate + Local AES-GCM): ${snap.slotName}"
             }
         )
     }
@@ -1616,6 +1634,62 @@ class BoxBoyViewModel(
 
     fun refreshNetworkHealth() {
         networkHealthService.refreshNetworkHealth()
+        oasisServerClient.triggerTailscaleAnchorHandshakeAsync(
+            isTailscaleInterfaceDetected = networkHealth.value.isTailscaleActive || networkHealth.value.isPrivateNetworkDetected
+        )
+    }
+
+    fun probeTailscaleHandshakeNow() {
+        oasisServerClient.triggerTailscaleAnchorHandshakeAsync(
+            isTailscaleInterfaceDetected = networkHealth.value.isTailscaleActive || networkHealth.value.isPrivateNetworkDetected
+        )
+    }
+
+    fun applyTrashArcadeLaunchParams(params: TrashArcadeLaunchParams) {
+        if (!params.hasDeepLinkOverrides) return
+        _trashArcadeLaunchParams.value = params
+        val themeLower = params.oasisLdsTheme?.lowercase().orEmpty()
+        if (themeLower == "high-contrast") {
+            _controllerConfig.value = _controllerConfig.value.copy(highContrastMode = true, crtScanlinesEnabled = false)
+        } else if (themeLower == "calm") {
+            _controllerConfig.value = _controllerConfig.value.copy(reduceMotionAndFlashes = true, crtScanlinesEnabled = false)
+        }
+        val targetHostMode = when (params.oasisHostMode?.uppercase()) {
+            "HOST_LOCAL_DEVICE", "HOST-02" -> LfsHostMode.HOST_LOCAL_DEVICE
+            "LAUNCH_U2_HOSTING_SERVICE", "HOST-01" -> LfsHostMode.LAUNCH_U2_HOSTING_SERVICE
+            else -> oasisStatus.value.hostMode
+        }
+        oasisServerClient.setHostMode(targetHostMode)
+        if (!params.oasisRoomCode.isNullOrBlank()) {
+            launchOrJoinLfsHostedRoom(
+                roomCode = params.oasisRoomCode,
+                hostMode = targetHostMode,
+                lifecyclePolicy = oasisStatus.value.lifecyclePolicy
+            )
+        }
+        if (params.oasisAutostart) {
+            _gameState.value = _gameState.value.copy(
+                isPaused = false,
+                statusToast = "TRASHARCADE DEEP-LINK AUTOSTART: ${params.oasisDisplayName ?: params.oasisSubuserId ?: "OWNER"}"
+            )
+        }
+    }
+
+    private fun loadTrashArcadeRelicsFromPrefs() {
+        val raw = localPrefs.getString("lfs_local_abac_v1_relics", null).orEmpty()
+        val parsed = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        _unlockedTrashArcadeRelics.value = parsed
+    }
+
+    fun unlockTrashArcadeRelic(relic: TrashArcadeSharedRelic) {
+        val current = _unlockedTrashArcadeRelics.value
+        if (relic.relicId in current) return
+        val next = current + relic.relicId
+        _unlockedTrashArcadeRelics.value = next
+        localPrefs.edit().putString("lfs_local_abac_v1_relics", next.joinToString(",")).apply()
+        _gameState.value = _gameState.value.copy(
+            statusToast = "TRASHARCADE RELIC UNLOCKED [lfs-local-abac-v1]: ${relic.title}"
+        )
     }
 
     fun setManualPrivateNetworkOverride(enabled: Boolean) {
@@ -1764,6 +1838,17 @@ class BoxBoyViewModel(
         }
         _dailyDirectives.value = updatedDirectives
         persistCareerAndDirectivesToPrefs(updatedDossier, updatedDirectives)
+
+        // Check cross-game TrashArcade lfs-local-abac-v1 relic unlocks
+        if (updatedDossier.bossKills >= 1) {
+            unlockTrashArcadeRelic(TrashArcadeSharedRelic.CHARM_VALKOR9_BRASS_COLLAR)
+        }
+        if (currentWave >= 5 && _gameState.value.cameraTension.lightingMode == LightingAtmosphereMode.ABYSSAL_BIO_NOIR) {
+            unlockTrashArcadeRelic(TrashArcadeSharedRelic.UNDERCITY_DELVER_TORCH)
+        }
+        if (updatedDossier.squadRevives >= 1 || _gameState.value.coopPeers.any { !it.isDowned }) {
+            unlockTrashArcadeRelic(TrashArcadeSharedRelic.WILLOW_VISOR_EMERALD)
+        }
     }
 
     private fun recordUpgradeOrForgeEvent() {
@@ -1781,6 +1866,7 @@ class BoxBoyViewModel(
         }
         _dailyDirectives.value = updatedDirectives
         persistCareerAndDirectivesToPrefs(updatedDossier, updatedDirectives)
+        unlockTrashArcadeRelic(TrashArcadeSharedRelic.CRUCIBLE_ATOMIC_SIGNET)
     }
 
     private fun persistCareerAndDirectivesToPrefs(dossier: CareerDossier, directives: List<DailyDirective>) {

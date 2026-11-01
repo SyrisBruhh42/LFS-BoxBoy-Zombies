@@ -90,7 +90,7 @@ fun AbyssalTacticalHudStrip(
     ) {
         // 1. Phase 1: Chiaroscuro Lighting & Camera Tension Pill
         TacticalPillChip(
-            label = "CAM ${String.format(Locale.US, "%.1fx", state.cameraTension.currentZoom)} • ${
+            label = "CAM ${String.format(Locale.US, "%.1fx", state.cameraTension.currentZoom)} | ${
                 state.cameraTension.lightingMode.name.substringBefore("_")
             }",
             accentColor = CryoCyan,
@@ -107,7 +107,7 @@ fun AbyssalTacticalHudStrip(
 
         // 2. Phase 2: 7-Node Ring Buffer & 180s Chunk Entropy Pill
         TacticalPillChip(
-            label = "MAZE ${state.mazeState.ringBufferNodes.size}/7 • ENTROPY ${entropySec}s/180s",
+            label = "MAZE ${state.mazeState.ringBufferNodes.size}/7 | ENTROPY ${entropySec}s/180s",
             accentColor = Color(entropyStage.colorHex),
             tag = "hud_phase2_maze_entropy_chip",
             onClick = onOpenRpgAnvilModal
@@ -273,10 +273,10 @@ fun TimeFreezeLootInspectOverlay(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text("4-PART MODULAR ARCHITECTURE:", style = MaterialTheme.typography.labelSmall, color = MysteryGold, fontWeight = FontWeight.Bold)
-                        Text("• Receiver: ${cand.receiver.name}", style = MaterialTheme.typography.bodySmall, color = TextCrisp)
-                        Text("• Barrel: ${cand.barrel.name} (Pierce: ${cand.effectivePierceCount}, Pellets: ${cand.effectivePelletCount})", style = MaterialTheme.typography.bodySmall, color = TextCrisp)
-                        Text("• Magazine: ${cand.magazine.name} [${cand.magazine.elementalAffinity.displayName}]", style = MaterialTheme.typography.bodySmall, color = Color(cand.magazine.elementalAffinity.colorHex))
-                        Text("• Optic: ${cand.optic.name} (+${cand.optic.lanternRangeBonusPx.toInt()}px Lantern Beam)", style = MaterialTheme.typography.bodySmall, color = CryoCyan)
+                        Text("| Receiver: ${cand.receiver.name}", style = MaterialTheme.typography.bodySmall, color = TextCrisp)
+                        Text("| Barrel: ${cand.barrel.name} (Pierce: ${cand.effectivePierceCount}, Pellets: ${cand.effectivePelletCount})", style = MaterialTheme.typography.bodySmall, color = TextCrisp)
+                        Text("| Magazine: ${cand.magazine.name} [${cand.magazine.elementalAffinity.displayName}]", style = MaterialTheme.typography.bodySmall, color = Color(cand.magazine.elementalAffinity.colorHex))
+                        Text("| Optic: ${cand.optic.name} (+${cand.optic.lanternRangeBonusPx.toInt()}px Lantern Beam)", style = MaterialTheme.typography.bodySmall, color = CryoCyan)
                     }
                 } else if (drop.payloadKind == LootPayloadKind.RPG_ARMOR_PIECE && drop.armorPayload != null) {
                     val piece = drop.armorPayload
@@ -285,7 +285,7 @@ fun TimeFreezeLootInspectOverlay(
                     val shdDelta = piece.effectiveShieldBonus - (equippedPiece?.effectiveShieldBonus ?: 0)
 
                     Text(
-                        text = "Slot: ${piece.slot.displayName} • Set: ${piece.setArchetype.setName}",
+                        text = "Slot: ${piece.slot.displayName} | Set: ${piece.setArchetype.setName}",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextCrisp
                     )
@@ -425,7 +425,7 @@ fun AbyssalRpgAnvilAndArmorDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Scrap: ${escrow.abyssalScrap} • Crystals: ${escrow.abyssalCrystals} • Escrow Vault: ${escrow.bankedEscrowPoints} PTS",
+                            text = "Scrap: ${escrow.abyssalScrap} | Crystals: ${escrow.abyssalCrystals} | Escrow Vault: ${escrow.bankedEscrowPoints} PTS",
                             style = MaterialTheme.typography.labelMedium,
                             color = CryoCyan
                         )
@@ -450,7 +450,7 @@ fun AbyssalRpgAnvilAndArmorDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${modWpn.customTitle} • DMG ${modWpn.effectiveDamage} • MAG ${modWpn.effectiveMagSize} • LIGHT-CRIT ${(modWpn.illuminatedCritMultiplier * 100).toInt()}%",
+                            text = "${modWpn.customTitle} | DMG ${modWpn.effectiveDamage} | MAG ${modWpn.effectiveMagSize} | LIGHT-CRIT ${(modWpn.illuminatedCritMultiplier * 100).toInt()}%",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextCrisp,
                             fontWeight = FontWeight.Bold
@@ -511,7 +511,7 @@ fun AbyssalRpgAnvilAndArmorDialog(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Total DEF: ${rig.totalDefenseRating} (${(rig.damageReductionFraction * 100).toInt()}% Mitigation) • Shield: ${state.shield}/${state.maxShield} • Active Set: ${palette.activeSetName}",
+                                    text = "Total DEF: ${rig.totalDefenseRating} (${(rig.damageReductionFraction * 100).toInt()}% Mitigation) | Shield: ${state.shield}/${state.maxShield} | Active Set: ${palette.activeSetName}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextCrisp
                                 )
@@ -544,7 +544,7 @@ fun AbyssalRpgAnvilAndArmorDialog(
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = "DEF ${piece.effectiveDefense} • SHD +${piece.effectiveShieldBonus} • Set: ${piece.setArchetype.setName}",
+                                            text = "DEF ${piece.effectiveDefense} | SHD +${piece.effectiveShieldBonus} | Set: ${piece.setArchetype.setName}",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = TextMuted,
                                             fontSize = 10.sp
@@ -591,7 +591,7 @@ fun AbyssalRpgAnvilAndArmorDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Ring Buffer Nodes: ${state.mazeState.ringBufferNodes.size}/7 • Non-Euclidean Rewrites: ${state.mazeState.nonEuclideanRewritesCount} • Last Event: ${state.mazeState.lastTopologicalEvent}",
+                            text = "Ring Buffer Nodes: ${state.mazeState.ringBufferNodes.size}/7 | Non-Euclidean Rewrites: ${state.mazeState.nonEuclideanRewritesCount} | Last Event: ${state.mazeState.lastTopologicalEvent}",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextCrisp
                         )

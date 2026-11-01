@@ -418,7 +418,7 @@ object OrthographicWorldRenderer {
             }
         }
 
-        // Foreground Props (y > py) — player walks behind these 3D buildings/trees/barrels/stations!
+        // Foreground Props (y > py) -- player walks behind these 3D buildings/trees/barrels/stations!
         for (i in 0 until drops.size) {
             val drop = drops[i]
             if (drop.y > py && drop.x in cullMinX..cullMaxX && drop.y in cullMinY..cullMaxY) {

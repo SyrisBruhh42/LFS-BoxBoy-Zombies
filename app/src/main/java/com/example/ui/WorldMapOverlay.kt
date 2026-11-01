@@ -229,7 +229,7 @@ fun InteractiveWorldMapModal(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "5-Pass Topology: 6 Towns • 3-Tier Road Network • Connected River & 7 Lakes • ${state.map.townBuildings.size} Parcel Buildings • ${state.map.foliage.size} Trees/Shrubs",
+                                text = "5-Pass Topology: 6 Towns | 3-Tier Road Network | Connected River & 7 Lakes | ${state.map.townBuildings.size} Parcel Buildings | ${state.map.foliage.size} Trees/Shrubs",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted
                             )

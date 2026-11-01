@@ -223,7 +223,12 @@ data class LfsServerEndpointConfig(
     val syncRelayWsUrl: String = "wss://play.lewisfamilysystems.com/ws",
     val fallbackRelayWsUrl: String = "wss://sync.lewisfamilysystems.com/ws",
     val localHosterUrl: String = "http://127.0.0.1:19448",
-    val customServerUrl: String = ""
+    val customServerUrl: String = "",
+    val tailscaleAnchorHost: String = "https://lfs-prod.tail420c4d.ts.net",
+    val tailscaleAnchorSsoUrl: String = "http://100.106.12.104:13379/lfs-sso",
+    val tailscaleLaputaHosterUrl: String = "http://100.115.219.120:19448",
+    val expectedTailnetId: String = "TNoZe9MmWS11CNTRL",
+    val expectedTailnetDomain: String = "tail420c4d.ts.net"
 )
 
 data class HostedRoomDescriptor(
@@ -352,11 +357,11 @@ data class CareerDossier(
 ) {
     val careerRankTitle: String
         get() = when {
-            totalKills >= 1500 || highestWave >= 25 -> "ABYSSAL COMMANDER ★5"
-            totalKills >= 600 || highestWave >= 15 -> "BOXHEAD VANGUARD ★4"
-            totalKills >= 250 || highestWave >= 10 -> "CRYO SPECIALIST ★3"
-            totalKills >= 75 || highestWave >= 5 -> "BUNKER CORPORAL ★2"
-            else -> "RECRUIT SURVIVOR ★1"
+            totalKills >= 1500 || highestWave >= 25 -> "ABYSSAL COMMANDER [TIER-5]"
+            totalKills >= 600 || highestWave >= 15 -> "BOXHEAD VANGUARD [TIER-4]"
+            totalKills >= 250 || highestWave >= 10 -> "CRYO SPECIALIST [TIER-3]"
+            totalKills >= 75 || highestWave >= 5 -> "BUNKER CORPORAL [TIER-2]"
+            else -> "RECRUIT SURVIVOR [TIER-1]"
         }
 }
 
@@ -368,5 +373,60 @@ data class AppStoreSettingsState(
     val developerModeEnabled: Boolean = false,
     val hasSeenFieldManual: Boolean = false
 )
+
+// --- TRASHARCADE LAUNCHER DEEP-LINK & CROSS-GAME ASSET BRIDGE (lfs-local-abac-v1) ---
+
+data class TrashArcadeLaunchParams(
+    val oasisRoomCode: String? = null,
+    val oasisHostMode: String? = null,
+    val oasisSubuserId: String? = null,
+    val oasisDisplayName: String? = null,
+    val oasisLdsTheme: String? = null,
+    val oasisAutostart: Boolean = false
+) {
+    val hasDeepLinkOverrides: Boolean
+        get() = !oasisRoomCode.isNullOrBlank() ||
+            !oasisHostMode.isNullOrBlank() ||
+            !oasisSubuserId.isNullOrBlank() ||
+            !oasisDisplayName.isNullOrBlank() ||
+            !oasisLdsTheme.isNullOrBlank() ||
+            oasisAutostart
+}
+
+enum class TrashArcadeSharedRelic(
+    val assetId: String,
+    val title: String,
+    val targetGames: String,
+    val unlockConditionDescription: String
+) {
+    CHARM_VALKOR9_BRASS_COLLAR(
+        assetId = "charm_valkor9_brass_collar",
+        title = "Valkor-9 Brass Collar",
+        targetGames = "willow-desktop-pet, undercity-crawler",
+        unlockConditionDescription = "First Boss kill -- tames Valkor-9 Slag-Hound in willow-desktop-pet & undercity-crawler"
+    ),
+    UNDERCITY_DELVER_TORCH(
+        assetId = "undercity-delver-torch",
+        title = "Undercity Delver Torch",
+        targetGames = "undercity-crawler",
+        unlockConditionDescription = "Survive Wave 5 in Abyssal Bio-Noir lighting -- boosts visibility in undercity-crawler"
+    ),
+    CRUCIBLE_ATOMIC_SIGNET(
+        assetId = "crucible-atomic-signet",
+        title = "Crucible Atomic Signet",
+        targetGames = "lfs-tycoon",
+        unlockConditionDescription = "First Pack-a-Punch weapon upgrade -- boosts smelting in lfs-tycoon"
+    ),
+    WILLOW_VISOR_EMERALD(
+        assetId = "willow-visor-emerald",
+        title = "Willow Emerald Tactical Visor",
+        targetGames = "willow-desktop-pet",
+        unlockConditionDescription = "Revive a squadmate or AI bot in Co-Op -- equips Tactical Emerald Visor on willow-desktop-pet"
+    );
+
+    val relicId: String get() = assetId
+    val crossGamePerk: String get() = unlockConditionDescription
+}
+
 
 

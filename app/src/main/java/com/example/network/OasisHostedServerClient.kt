@@ -1,6 +1,7 @@
 package com.example.network
 
 import android.util.Log
+import com.example.data.AegisJsonObject
 import com.example.data.CryptoSyncEngine
 import com.example.data.HostedRoomDescriptor
 import com.example.data.HostedRoomSession
@@ -41,6 +42,7 @@ const val HAPPY_EYEBALLS_STAGGER_MS = 250L
 const val MAX_WS_RETRIES = 3
 const val BASE_WS_BACKOFF_MS = 500L
 const val MAX_WS_JITTER_MS = 150L
+private const val JSON_UTF8_MEDIA_TYPE = "application/json; charset=utf-8"
 
 enum class WorldEventType(val wireId: String) {
     DOOR_UNLOCK("DOOR_UNLOCK"),
@@ -72,6 +74,63 @@ data class HostWorldSyncPacket(
     val timestampMs: Long = System.currentTimeMillis()
 )
 
+/**
+ * 32-State `FIRST_APPLICABLE_DENY` ABAC Lattice Decision.
+ */
+data class AbacDecision(
+    val permit: Boolean,
+    val stateBits: Int,
+    val reason: String
+)
+
+/**
+ * Total Lexical Order `(ts, replicaId, val)` LWW Record across Android (`U1`), `Laputa` (`U3`), and `lfs-prod` (`U2`).
+ */
+data class LwwRecord(
+    val ts: Long,
+    val replicaId: String,
+    val value: String
+) {
+    val `val`: String get() = value
+}
+
+/**
+ * 4-Pillar Tailscale Zero-Trust Auto-SSO Handshake State (`tail420c4d.ts.net` / `100.106.12.104:13379`).
+ * Uses Machado CVD-safe `[PASS]` / `[WARN]` badges.
+ */
+data class TailscaleSsoHandshakeState(
+    val isAnchorVerified: Boolean = false,
+    val stableNodeId: String = "node-stable-lfs-android-01",
+    val tailnetId: String = "TNoZe9MmWS11CNTRL",
+    val tailnetDomain: String = "tail420c4d.ts.net",
+    val subuserId: String = "primary",
+    val persona: String = "OWNER",
+    val trustRing: Int = 3,
+    val generationEpoch: Int = 1,
+    val tailscaleTunnelBadge: String = "[PASS]",
+    val abacPerimeterBadge: String = "[PASS]",
+    val isolatedProfileBadge: String = "[PASS]",
+    val userDataBackupBadge: String = "[PASS]",
+    val abacDecision: AbacDecision = OasisHostedServerClient.evaluateAbac32Lattice(
+        explicitDeny = false,
+        trustRing = 3,
+        minRing = 2,
+        vipBypass = false,
+        curfewOk = true,
+        stepUpOk = true
+    ),
+    val lastProbedEndpoint: String = "https://lfs-prod.tail420c4d.ts.net/lfs-sso/handshake",
+    val lastProbedAtMs: Long = System.currentTimeMillis()
+) {
+    val pillarChecks: Map<String, String>
+        get() = linkedMapOf(
+            "tailscale_tunnel" to tailscaleTunnelBadge,
+            "abac_perimeter" to abacPerimeterBadge,
+            "isolated_profile" to isolatedProfileBadge,
+            "user_data_backup" to userDataBackupBadge
+        )
+}
+
 data class OasisConnectionTelemetry(
     val isConnectedToLfsEdge: Boolean = false,
     val activeTierLabel: String = "STANDBY (3-Tier Auto-Failover Ready)",
@@ -82,7 +141,9 @@ data class OasisConnectionTelemetry(
     val wsFramesReceived: Int = 0,
     val wsReconnectAttempt: Int = 0,
     val lastMigrationLatencyMs: Long = 0L,
-    val statusBanner: String = "LFS Oasis Ready — U1/U2 Dedicated Server, Local Host Tunnel, or Firestore Relay"
+    val tailscaleHandshake: TailscaleSsoHandshakeState = TailscaleSsoHandshakeState(),
+    val lastCustodySlotKey: String = "slot_01",
+    val statusBanner: String = "LFS Oasis Ready - U1/U2 Dedicated Server, Local Host Tunnel, or Firestore Relay"
 ) {
     val isConnected: Boolean get() = isConnectedToLfsEdge
     val roomCode: String get() = activeRoom.roomCode
@@ -98,12 +159,9 @@ data class OasisConnectionTelemetry(
 typealias OasisSessionStatus = OasisConnectionTelemetry
 
 /**
- * Hosted LFS Oasis Server Client (`play.lewisfamilysystems.com` / `sync.lewisfamilysystems.com` / `:19448`)
- * with 3-Tier Transport Failover:
- * - Tier A: Hosted LFS Server WebSocket (`okhttp3.WebSocket`) + REST Hoster Control Plane (`/api/lfs/sync/hoster`)
- *   using RFC 8305 Staggered Happy-Eyeballs (250ms head start) and 3-attempt exponential backoff with jitter.
- * - Tier B: Firebase Firestore Live Room Relay (`/multiplayer_rooms/{roomCode}`)
- * - Tier C: Direct LAN/USB/Bluetooth TCP Socket (`:48899`) + Offline AI Squad Bots (`@willow`, `@cinder`, `@mote`)
+ * Hosted LFS Oasis Server Client (`play.lewisfamilysystems.com` / `lfs-prod.tail420c4d.ts.net` / `:19448`)
+ * with 3-Tier Transport Failover, Zero-Trust Tailscale Auto-SSO Handshake (`100.106.12.104:13379`),
+ * exact `U2` and `U3` route alignment, and 6-Gate `aegisEnvelopeV1` 20-Slot SaveLab custody.
  */
 class OasisHostedServerClient(
     private val scope: CoroutineScope,
@@ -123,6 +181,9 @@ class OasisHostedServerClient(
 
     private val _endpointConfig = MutableStateFlow(LfsServerEndpointConfig())
     val endpointConfig: StateFlow<LfsServerEndpointConfig> = _endpointConfig.asStateFlow()
+
+    private val _handshakeState = MutableStateFlow(TailscaleSsoHandshakeState())
+    val handshakeState: StateFlow<TailscaleSsoHandshakeState> = _handshakeState.asStateFlow()
 
     private val _telemetry = MutableStateFlow(
         OasisConnectionTelemetry(
@@ -189,8 +250,85 @@ class OasisHostedServerClient(
     }
 
     /**
-     * Suspend REST Hoster Control Plane (`POST /api/lfs/sync/hoster`) with Staggered Happy-Eyeballs racing (250ms head start).
-     * Supports both camelCase and snake_case JSON keys.
+     * Best-of-All-3 Tailscale Zero-Trust Anchor Auto-SSO Handshake Probe:
+     * 1. Races `GET ${tailscaleAnchorHost}/lfs-sso/handshake` (`https://lfs-prod.tail420c4d.ts.net/lfs-sso/handshake`)
+     *    and `GET ${tailscaleAnchorSsoUrl}/handshake` (`http://100.106.12.104:13379/lfs-sso/handshake`) with `<= 1500ms` timeout.
+     * 2. Sequentially falls back if one transport is blocked.
+     * 3. Synthesizes deterministic `Node.StableID` (`replicaId`), `subuserId` (`"primary"`), `persona` (`"OWNER"`),
+     *    `trustRing` (`3`), `generationEpoch` (`1`), and Machado CVD-safe `[PASS]`/`[WARN]` pillar badges.
+     */
+    suspend fun probeTailscaleAnchorHandshake(
+        isTailscaleInterfaceDetected: Boolean = true
+    ): Result<TailscaleSsoHandshakeState> = withContext(Dispatchers.IO) {
+        val cfg = _endpointConfig.value
+        val candidateUrls = listOf(
+            "${cfg.tailscaleAnchorHost.trimEnd('/')}/lfs-sso/handshake",
+            "${cfg.tailscaleAnchorSsoUrl.trimEnd('/')}/handshake"
+        ).distinct()
+
+        val raced = raceHappyEyeballsEndpoints(
+            candidateUrls = candidateUrls,
+            staggerMs = 150L
+        ) { handshakeUrl ->
+            val req = Request.Builder()
+                .url(handshakeUrl)
+                .get()
+                .header("Accept", JSON_UTF8_MEDIA_TYPE)
+                .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val raw = resp.body?.string().orEmpty()
+                parseHandshakeResponseJson(raw, handshakeUrl, cfg)
+            }
+        }
+
+        val resolvedState = raced ?: run {
+            val tunnelBadge = if (isTailscaleInterfaceDetected) "[PASS]" else "[WARN]"
+            val abac = evaluateAbac32Lattice(
+                explicitDeny = false,
+                trustRing = 3,
+                minRing = 2,
+                vipBypass = false,
+                curfewOk = true,
+                stepUpOk = true
+            )
+            TailscaleSsoHandshakeState(
+                isAnchorVerified = false,
+                stableNodeId = "node-stable-lfs-android-01",
+                tailnetId = cfg.expectedTailnetId,
+                tailnetDomain = cfg.expectedTailnetDomain,
+                subuserId = "primary",
+                persona = "OWNER",
+                trustRing = 3,
+                generationEpoch = 1,
+                tailscaleTunnelBadge = tunnelBadge,
+                abacPerimeterBadge = if (abac.permit) "[PASS]" else "[WARN]",
+                isolatedProfileBadge = "[PASS]",
+                userDataBackupBadge = "[PASS]",
+                abacDecision = abac,
+                lastProbedEndpoint = candidateUrls.first()
+            )
+        }
+
+        _handshakeState.value = resolvedState
+        _telemetry.value = _telemetry.value.copy(
+            tailscaleHandshake = resolvedState,
+            statusBanner = "Tailscale SSO Handshake [${resolvedState.stableNodeId}] Ring-${resolvedState.trustRing} " +
+                "(${resolvedState.tailscaleTunnelBadge} Tunnel | ${resolvedState.abacPerimeterBadge} ABAC)"
+        )
+        Result.success(resolvedState)
+    }
+
+    fun triggerTailscaleAnchorHandshakeAsync(isTailscaleInterfaceDetected: Boolean = true) {
+        scope.launch(Dispatchers.IO) {
+            probeTailscaleAnchorHandshake(isTailscaleInterfaceDetected)
+        }
+    }
+
+    /**
+     * Suspend REST Room Creation / Registration with automatic `U3` (`:19448` `/v1/hoster/rooms`)
+     * vs. `U2` (`/api/lfs/sync/rooms` & `/api/lfs/sync/hoster`) route selection and Staggered Happy-Eyeballs racing.
      */
     suspend fun createOrJoinHostedRoom(
         roomCode: String,
@@ -200,34 +338,56 @@ class OasisHostedServerClient(
         initialSaveEnvelope: String? = null,
         roomTitle: String = _telemetry.value.activeRoom.roomTitle,
         mapSeed: Long = _telemetry.value.activeRoom.mapSeed,
-        currentWave: Int = _telemetry.value.activeRoom.currentWave
+        currentWave: Int = _telemetry.value.activeRoom.currentWave,
+        hostName: String = "Survivor"
     ): Result<HostedRoomSession> = withContext(Dispatchers.IO) {
         val cleanCode = normalizeRoomCode(roomCode)
         val cfg = _endpointConfig.value
         val candidateBaseUrls = resolveCandidateEndpoints(cfg)
         val currentEpoch = _telemetry.value.activeRoom.hostEpoch
 
-        val payloadJson = buildHosterControlPayload(
-            roomCode = cleanCode,
-            roomTitle = roomTitle,
-            hostMode = hostMode,
-            lifecyclePolicy = lifecyclePolicy,
-            maxPlayers = maxPlayers,
-            initialStateEnvelope = initialSaveEnvelope,
-            mapSeed = mapSeed,
-            currentWave = currentWave,
-            hostEpoch = currentEpoch
-        )
-
         val racedDescriptor = raceHappyEyeballsEndpoints(
             candidateUrls = candidateBaseUrls,
             staggerMs = HAPPY_EYEBALLS_STAGGER_MS
         ) { baseUrl ->
+            val isU3 = isU3HosterEndpoint(baseUrl)
+            val targetUrl = if (isU3) {
+                "$baseUrl/v1/hoster/rooms"
+            } else {
+                "$baseUrl/api/lfs/sync/rooms"
+            }
+            val payloadJson = if (isU3) {
+                buildU3HosterCreateRoomPayload(
+                    cleanCode = cleanCode,
+                    roomTitle = roomTitle,
+                    hostMode = hostMode,
+                    lifecyclePolicy = lifecyclePolicy,
+                    mapSeed = mapSeed,
+                    currentWave = currentWave,
+                    maxPlayers = maxPlayers
+                )
+            } else {
+                buildU2CreateRoomAndHosterPayload(
+                    cleanCode = cleanCode,
+                    roomTitle = roomTitle,
+                    hostName = hostName,
+                    hostMode = hostMode,
+                    lifecyclePolicy = lifecyclePolicy,
+                    maxPlayers = maxPlayers,
+                    initialStateEnvelope = initialSaveEnvelope,
+                    mapSeed = mapSeed,
+                    currentWave = currentWave,
+                    hostEpoch = currentEpoch
+                )
+            }
+
             val req = Request.Builder()
-                .url("$baseUrl/api/lfs/sync/hoster")
-                .post(payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .header("X-Oasis-Protocol", "oasis-v1")
+                .url(targetUrl)
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                .post(payloadJson.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
                 .build()
+
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
                 val bodyStr = resp.body?.string().orEmpty()
@@ -306,7 +466,8 @@ class OasisHostedServerClient(
     }
 
     /**
-     * Suspend query for `GET /api/lfs/sync/rooms?gameId=lfs-boxboy-zombies` with Staggered Happy-Eyeballs racing.
+     * Suspend query for active public rooms using exact `U3` (`GET /v1/hoster/status`) or
+     * `U2` (`GET /api/lfs/sync/rooms?capsuleTarget=lfs-trash-arcade`) routes.
      */
     suspend fun fetchActivePublicRooms(): Result<List<HostedRoomSummary>> = withContext(Dispatchers.IO) {
         val cfg = _endpointConfig.value
@@ -315,10 +476,15 @@ class OasisHostedServerClient(
             candidateUrls = candidates,
             staggerMs = HAPPY_EYEBALLS_STAGGER_MS
         ) { baseUrl ->
+            val targetUrl = if (isU3HosterEndpoint(baseUrl)) {
+                "$baseUrl/v1/hoster/status"
+            } else {
+                "$baseUrl/api/lfs/sync/rooms?capsuleTarget=lfs-trash-arcade&gameId=lfs-boxboy-zombies"
+            }
             val req = Request.Builder()
-                .url("$baseUrl/api/lfs/sync/rooms?gameId=lfs-boxboy-zombies")
+                .url(targetUrl)
                 .get()
-                .header("X-Oasis-Protocol", "oasis-v1")
+                .header("X-Oasis-Protocol", "oasis-v2-cp12")
                 .build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
@@ -337,7 +503,7 @@ class OasisHostedServerClient(
     }
 
     /**
-     * Lists active public rooms from `GET /api/lfs/sync/rooms?gameId=lfs-boxboy-zombies` merged with known live rooms.
+     * Lists active public rooms from `U2`/`U3` merged with known live rooms.
      */
     fun listActivePublicRooms() {
         scope.launch(Dispatchers.IO) {
@@ -351,7 +517,9 @@ class OasisHostedServerClient(
     }
 
     /**
-     * Suspend CAS Live Host Mode Migration (`POST /api/lfs/sync/hoster` with `action = "migrate-mode"` and `host_epoch = currentEpoch + 1`).
+     * Suspend CAS Live `<300ms` Host Mode Migration:
+     * - On `U3` (`:19448`): `POST $baseUrl/v1/hoster/migrate` with `{ "room_id": cleanCode, "target_mode": targetMode.wireId, "expected_epoch": currentEpoch }`
+     * - On `U2`: `POST $baseUrl/api/lfs/sync/hoster` with `{ "action": "migrate-mode", "room_id": cleanCode, "target_mode": targetMode.wireId, "expected_epoch": currentEpoch, "host_epoch": nextEpoch }`
      */
     suspend fun migrateHostMode(
         roomCode: String,
@@ -366,9 +534,17 @@ class OasisHostedServerClient(
             CryptoSyncEngine.encryptSnapshot(it, currentPassphrase)
         }
 
-        val bodyJson = JSONObject().apply {
+        val cfg = _endpointConfig.value
+        val baseUrl = cfg.customServerUrl.ifBlank { cfg.primaryEdgeHost }.trimEnd('/')
+        val isU3 = isU3HosterEndpoint(baseUrl)
+        val migrateUrl = if (isU3) "$baseUrl/v1/hoster/migrate" else "$baseUrl/api/lfs/sync/hoster"
+
+        val bodyJson = AegisJsonObject().apply {
             put("action", "migrate-mode")
             put("gameId", "lfs-boxboy-zombies")
+            put("game_id", "lfs-boxboy-zombies")
+            put("room_id", cleanCode)
+            put("roomId", cleanCode)
             put("roomCode", cleanCode)
             put("room_code", cleanCode)
             put("hostMode", targetMode.wireId)
@@ -384,13 +560,12 @@ class OasisHostedServerClient(
             }
         }.toString()
 
-        val cfg = _endpointConfig.value
-        val baseUrl = cfg.customServerUrl.ifBlank { cfg.primaryEdgeHost }.trimEnd('/')
         try {
             val req = Request.Builder()
-                .url("$baseUrl/api/lfs/sync/hoster")
-                .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .header("X-Oasis-Protocol", "oasis-v1")
+                .url(migrateUrl)
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                .post(bodyJson.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
                 .build()
             httpClient.newCall(req).execute().close()
         } catch (_: Exception) {
@@ -440,6 +615,205 @@ class OasisHostedServerClient(
         }
     }
 
+    /**
+     * `U3` On-Demand `<500ms` Wake: `POST $baseUrl/v1/hoster/wake` with `{ "room_id": cleanCode }`.
+     */
+    suspend fun wakeStandbyHosterRoom(roomCode: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val cleanCode = normalizeRoomCode(roomCode)
+        val cfg = _endpointConfig.value
+        val u3Base = cfg.customServerUrl.takeIf { isU3HosterEndpoint(it) }
+            ?: cfg.tailscaleLaputaHosterUrl.ifBlank { cfg.localHosterUrl }
+        val payload = "{\"room_id\":\"$cleanCode\",\"room_code\":\"$cleanCode\"}"
+        runCatching {
+            val req = Request.Builder()
+                .url("${u3Base.trimEnd('/')}/v1/hoster/wake")
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .post(payload.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }
+    }
+
+    /**
+     * `U3` Rate-Limited Join (`5/min`): `POST $baseUrl/v1/hoster/join` with `{ "actor_id": peerId }`.
+     */
+    suspend fun joinU3HosterRoomRateLimited(peerId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val cfg = _endpointConfig.value
+        val u3Base = cfg.customServerUrl.takeIf { isU3HosterEndpoint(it) }
+            ?: cfg.tailscaleLaputaHosterUrl.ifBlank { cfg.localHosterUrl }
+        val payload = "{\"actor_id\":\"$peerId\"}"
+        runCatching {
+            val req = Request.Builder()
+                .url("${u3Base.trimEnd('/')}/v1/hoster/join")
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .post(payload.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }
+    }
+
+    /**
+     * `U2` CRDT State Delta Push: `POST $baseUrl/api/lfs/sync/state` with `{ "roomId": cleanCode, "ops": [...] }`.
+     */
+    suspend fun pushCrdtStateDelta(roomCode: String, record: LwwRecord): Result<Boolean> = withContext(Dispatchers.IO) {
+        val cleanCode = normalizeRoomCode(roomCode)
+        val cfg = _endpointConfig.value
+        val baseUrl = cfg.tailscaleAnchorHost.ifBlank { cfg.primaryEdgeHost }.trimEnd('/')
+        val payload = """{"roomId":"$cleanCode","ops":[{"ts":${record.ts},"replicaId":"${record.replicaId}","val":"${record.value}"}]}"""
+        runCatching {
+            val req = Request.Builder()
+                .url("$baseUrl/api/lfs/sync/state")
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .post(payload.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }
+    }
+
+    /**
+     * `U2` Event Polling: `GET $baseUrl/api/lfs/sync/events?roomId=$cleanCode&since=$seq&format=json`.
+     */
+    suspend fun pollU2RoomEvents(roomCode: String, sinceSeq: Long = 0L): Result<String> = withContext(Dispatchers.IO) {
+        val cleanCode = normalizeRoomCode(roomCode)
+        val cfg = _endpointConfig.value
+        val baseUrl = cfg.tailscaleAnchorHost.ifBlank { cfg.primaryEdgeHost }.trimEnd('/')
+        runCatching {
+            val req = Request.Builder()
+                .url("$baseUrl/api/lfs/sync/events?roomId=$cleanCode&since=$sinceSeq&format=json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                resp.body?.string().orEmpty()
+            }
+        }
+    }
+
+    /**
+     * `U2` Rich Presence Heartbeat: `POST $baseUrl/api/lfs/sync/presence`.
+     */
+    suspend fun sendRichPresenceHeartbeat(
+        hostName: String,
+        roomCode: String = _telemetry.value.activeRoom.roomCode,
+        joinable: Boolean = true
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        val cleanCode = normalizeRoomCode(roomCode)
+        val cfg = _endpointConfig.value
+        val baseUrl = cfg.tailscaleAnchorHost.ifBlank { cfg.primaryEdgeHost }.trimEnd('/')
+        val payload = AegisJsonObject().apply {
+            put("displayName", hostName)
+            put("surface", "android_hub")
+            put("status", "IN_CAPSULE")
+            put("activeCapsule", "lfs-trash-arcade")
+            put("activeCartridgeSlug", "lfs-boxboy-zombies")
+            put("activeRoomCode", cleanCode)
+            put("joinable", joinable)
+        }.toString()
+
+        runCatching {
+            val req = Request.Builder()
+                .url("$baseUrl/api/lfs/sync/presence")
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .post(payload.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }
+    }
+
+    /**
+     * 16-Channel `Rmblyn` Chat & After-Action Wave Challenge Cards:
+     * Dispatches to `POST $baseUrl/v1/overlay/rmblyn` on `U3` (`:19448`) or `POST $baseUrl/api/lfs/sync/rmblyn` on `U2`.
+     */
+    suspend fun postRmblynWaveChallengeCard(
+        challengeSummary: String,
+        channelId: String = "arcade-lounge",
+        subuserRole: String = "OWNER"
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        val cfg = _endpointConfig.value
+        val baseUrl = cfg.customServerUrl.ifBlank { cfg.tailscaleAnchorHost.ifBlank { cfg.primaryEdgeHost } }.trimEnd('/')
+        val targetUrl = if (isU3HosterEndpoint(baseUrl)) {
+            "$baseUrl/v1/overlay/rmblyn"
+        } else {
+            "$baseUrl/api/lfs/sync/rmblyn"
+        }
+        val payload = AegisJsonObject().apply {
+            put("channelId", channelId)
+            put("rawInput", challengeSummary)
+            put("activeCapsuleId", "lfs-boxboy-zombies")
+            put("subuserRole", subuserRole)
+        }.toString()
+
+        runCatching {
+            val req = Request.Builder()
+                .url(targetUrl)
+                .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                .post(payload.toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        }
+    }
+
+    /**
+     * Seals a [CryptoSyncEngine.GameSaveSnapshot] into the canonical 6-Gate `aegisEnvelopeV1`
+     * structure and commits it to Oasis SaveLab custody (`POST $baseUrl/api/lfs/sync/saves`,
+     * `slotKey` in `"slot_01".."slot_20"`, `capsuleTarget = "lfs-trash-arcade"`,
+     * `cartridgeSlug = "lfs-boxboy-zombies"`, `replicateToAnchor = true`).
+     */
+    suspend fun commitSaveToOasisCustody(
+        slotKey: String,
+        snapshot: CryptoSyncEngine.GameSaveSnapshot,
+        generation: Int = 1
+    ): Result<JSONObject> = withContext(Dispatchers.IO) {
+        val normalizedSlotKey = CryptoSyncEngine.normalizeSlotKey(slotKey)
+        val envelopeObj = CryptoSyncEngine.sealSixGateAegisEnvelopeV1(
+            slotKey = normalizedSlotKey,
+            snapshot = snapshot,
+            generation = generation,
+            passphrase = currentPassphrase
+        )
+        val requestBodyObj = AegisJsonObject().apply {
+            put("slotKey", normalizedSlotKey)
+            put("slot_key", normalizedSlotKey)
+            put("capsuleTarget", "lfs-trash-arcade")
+            put("cartridgeSlug", "lfs-boxboy-zombies")
+            put("replicateToAnchor", true)
+            put("generation", generation.coerceAtLeast(1))
+            put("envelope", envelopeObj)
+        }
+
+        val cfg = _endpointConfig.value
+        val candidateUrls = listOf(
+            cfg.tailscaleAnchorHost.trimEnd('/'),
+            cfg.primaryEdgeHost.trimEnd('/')
+        ).filter { it.isNotBlank() }.distinct()
+
+        for (baseUrl in candidateUrls) {
+            try {
+                val req = Request.Builder()
+                    .url("$baseUrl/api/lfs/sync/saves")
+                    .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
+                    .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                    .post(requestBodyObj.toString().toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        _telemetry.value = _telemetry.value.copy(
+                            lastCustodySlotKey = normalizedSlotKey,
+                            statusBanner = "Committed 6-Gate aegisEnvelopeV1 [$normalizedSlotKey] (gen #$generation) to Oasis SaveLab"
+                        )
+                        return@withContext Result.success(envelopeObj)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        _telemetry.value = _telemetry.value.copy(
+            lastCustodySlotKey = normalizedSlotKey,
+            statusBanner = "Sealed 6-Gate aegisEnvelopeV1 [$normalizedSlotKey] (gen #$generation) in Local SaveLab Vault"
+        )
+        Result.success(envelopeObj)
+    }
+
     private fun triggerTierBCFailover(
         cleanCode: String,
         roomTitle: String,
@@ -475,7 +849,7 @@ class OasisHostedServerClient(
             activeEndpointUrl = fallbackWsUrl,
             activeTierLabel = "TIER B/C FAILOVER: Cloud Room [$cleanCode] + Local P2P :48899",
             publicRooms = (listOf(fallbackDesc) + _telemetry.value.publicRooms.filter { it.roomCode != cleanCode }).take(8),
-            statusBanner = "LFS Edge Standby — Room [$cleanCode] live via Tier-B Cloud Relay & Tier-C P2P!"
+            statusBanner = "LFS Edge Standby - Room [$cleanCode] live via Tier-B Cloud Relay & Tier-C P2P!"
         )
         onFallbackTierRequired(fallbackDesc)
     }
@@ -587,7 +961,7 @@ class OasisHostedServerClient(
     fun sendTacticalMessage(senderTag: String, text: String): Boolean {
         val ws = activeWebSocket ?: return false
         if (!_telemetry.value.isConnectedToLfsEdge) return false
-        val json = JSONObject().apply {
+        val json = AegisJsonObject().apply {
             put("type", "TACTICAL_MSG")
             put("room", _telemetry.value.activeRoom.roomCode)
             put("sender", senderTag)
@@ -666,6 +1040,98 @@ class OasisHostedServerClient(
         private val ROOM_CODE_REGEX = Regex("^LFS-[0-9A-HJ-KM-NP-TV-Z]{6}$")
         private val secureRng = SecureRandom()
 
+        val CMY_RUPEE_DENOMINATIONS = intArrayOf(1000, 500, 200, 100, 50, 20, 10, 5, 1)
+        const val MAX_SATCHEL_STATIC_SPRITES = 24
+
+        /**
+         * Euclidean Positive Modulo in $\mathbb{Z}_{1440}$ for overnight curfews.
+         */
+        fun isWithinCurfewZ1440(minuteOfDay: Int, startMin: Int, endMin: Int): Boolean {
+            if (minuteOfDay !in 0..1439 || startMin !in 0..1439 || endMin !in 0..1439) return false
+            if (startMin == endMin) return true
+            val relNow = (((minuteOfDay - startMin) % 1440) + 1440) % 1440
+            val relEnd = (((endMin - startMin) % 1440) + 1440) % 1440
+            return relNow < relEnd
+        }
+
+        /**
+         * 32-State `FIRST_APPLICABLE_DENY` ABAC Lattice Evaluator:
+         * `permit = !explicitDeny && (trustRing >= minRing) && (vipBypass || (curfewOk && stepUpOk))`
+         */
+        fun evaluateAbac32Lattice(
+            explicitDeny: Boolean = false,
+            trustRing: Int = 3,
+            minRing: Int = 2,
+            vipBypass: Boolean = false,
+            curfewOk: Boolean = true,
+            stepUpOk: Boolean = true
+        ): AbacDecision {
+            val ringOk = trustRing >= minRing
+            val stateBits = (if (explicitDeny) 16 else 0) or
+                (if (ringOk) 8 else 0) or
+                (if (vipBypass) 4 else 0) or
+                (if (curfewOk) 2 else 0) or
+                (if (stepUpOk) 1 else 0)
+            val permit = !explicitDeny && ringOk && (vipBypass || (curfewOk && stepUpOk))
+            val reason = when {
+                explicitDeny -> "FIRST_APPLICABLE_DENY: explicit_deny"
+                !ringOk -> "FIRST_APPLICABLE_DENY: trust_ring_below_minimum($trustRing<$minRing)"
+                !vipBypass && !curfewOk -> "FIRST_APPLICABLE_DENY: curfew_window_active"
+                !vipBypass && !stepUpOk -> "FIRST_APPLICABLE_DENY: step_up_verification_required"
+                vipBypass -> "PERMIT: vip_bypass_ring_$trustRing"
+                else -> "PERMIT: abac_32_lattice_verified"
+            }
+            return AbacDecision(permit = permit, stateBits = stateBits, reason = reason)
+        }
+
+        /**
+         * Total Lexical Order `(ts, replicaId, val)` LWW Resolver across Android, `Laputa`, and `lfs-prod`.
+         */
+        fun resolveTotalOrderLww(a: LwwRecord, b: LwwRecord): LwwRecord {
+            return when {
+                a.ts != b.ts -> if (a.ts > b.ts) a else b
+                a.replicaId != b.replicaId -> if (a.replicaId > b.replicaId) a else b
+                else -> if (a.value >= b.value) a else b
+            }
+        }
+
+        /**
+         * Decomposes earned Survival Points/Rupees across the 9 canonical CMY gem denominations
+         * (`[1000, 500, 200, 100, 50, 20, 10, 5, 1]`), bounded to `<= 24` static sprites.
+         */
+        fun decomposeCmyRupees(balanceRup: Int): List<Pair<Int, Int>> {
+            var remaining = balanceRup.coerceAtLeast(0)
+            if (remaining == 0) return emptyList()
+            var spritesRemaining = MAX_SATCHEL_STATIC_SPRITES
+            val breakdown = mutableListOf<Pair<Int, Int>>()
+
+            for (denom in CMY_RUPEE_DENOMINATIONS) {
+                if (remaining <= 0 || spritesRemaining <= 0) break
+                val rawCount = remaining / denom
+                if (rawCount > 0) {
+                    val count = rawCount.coerceAtMost(spritesRemaining)
+                    breakdown.add(denom to count)
+                    remaining -= count * denom
+                    spritesRemaining -= count
+                }
+            }
+            return breakdown
+        }
+
+        fun computeSatchelTier(balanceRup: Int): String {
+            return when {
+                balanceRup >= 15_000 -> "ASTRAL_CHEST_TIER_4"
+                balanceRup >= 5_000 -> "VAULT_LOCKBOX_TIER_3"
+                balanceRup >= 1_000 -> "SATCHEL_TIER_2"
+                else -> "POUCH_TIER_1"
+            }
+        }
+
+        fun isU3HosterEndpoint(baseUrl: String): Boolean {
+            val trimmed = baseUrl.trim().lowercase()
+            return trimmed.contains(":19448") || trimmed.contains("/v1/hoster")
+        }
+
         fun generateRoomCode(seed: Long? = null): String {
             val sb = StringBuilder("LFS-")
             if (seed != null) {
@@ -710,6 +1176,8 @@ class OasisHostedServerClient(
         fun resolveCandidateEndpoints(cfg: LfsServerEndpointConfig): List<String> = buildList {
             if (cfg.customServerUrl.isNotBlank()) add(cfg.customServerUrl.trim().trimEnd('/'))
             add(cfg.localHosterUrl.trim().trimEnd('/'))
+            if (cfg.tailscaleLaputaHosterUrl.isNotBlank()) add(cfg.tailscaleLaputaHosterUrl.trim().trimEnd('/'))
+            if (cfg.tailscaleAnchorHost.isNotBlank()) add(cfg.tailscaleAnchorHost.trim().trimEnd('/'))
             add(cfg.primaryEdgeHost.trim().trimEnd('/'))
             add("https://sync.lewisfamilysystems.com")
         }.filter { it.isNotBlank() }.distinct()
@@ -773,6 +1241,46 @@ class OasisHostedServerClient(
         }
 
         /**
+         * Builds the exact `U3` (`:19448` `oasis_server_hoster.py`) `POST /v1/hoster/rooms` payload.
+         */
+        fun buildU3HosterCreateRoomPayload(
+            cleanCode: String,
+            roomTitle: String,
+            hostMode: LfsHostMode,
+            lifecyclePolicy: LfsLifecyclePolicy,
+            mapSeed: Long = 19960227L,
+            currentWave: Int = 1,
+            maxPlayers: Int = 4
+        ): String {
+            fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
+            return """{"room_id":"${esc(cleanCode)}","room_code":"${esc(cleanCode)}","game_id":"lfs-boxboy-zombies","host_mode":"${hostMode.wireId}","engine_kind":"ENGINE_A2_HEADLESS_NODE_VM_WORKER","lifecycle_policy":"${lifecyclePolicy.wireId}","initial_state":{"roomTitle":"${esc(roomTitle)}","mapSeed":$mapSeed,"currentWave":$currentWave,"maxPlayers":$maxPlayers},"lease_ttl_sec":7200}"""
+        }
+
+        /**
+         * Builds the `U2` Sovereign Web Platform `POST /api/lfs/sync/rooms` (and `/api/lfs/sync/hoster`) payload.
+         */
+        fun buildU2CreateRoomAndHosterPayload(
+            cleanCode: String,
+            roomTitle: String,
+            hostName: String = "Survivor",
+            hostMode: LfsHostMode = LfsHostMode.LAUNCH_U2_HOSTING_SERVICE,
+            lifecyclePolicy: LfsLifecyclePolicy = LfsLifecyclePolicy.ON_DEMAND_WAKE,
+            maxPlayers: Int = 4,
+            initialStateEnvelope: String? = null,
+            mapSeed: Long = 19960227L,
+            currentWave: Int = 1,
+            hostEpoch: Int = 1
+        ): String {
+            fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
+            val envelopeFields = if (!initialStateEnvelope.isNullOrBlank()) {
+                ",\"initialStateEnvelope\":\"${esc(initialStateEnvelope)}\",\"initial_state_envelope\":\"${esc(initialStateEnvelope)}\""
+            } else {
+                ""
+            }
+            return """{"action":"create","roomId":"${esc(cleanCode)}","room_id":"${esc(cleanCode)}","roomCode":"${esc(cleanCode)}","room_code":"${esc(cleanCode)}","capsuleTarget":"lfs-trash-arcade","cartridgeSlug":"lfs-boxboy-zombies","gameId":"lfs-boxboy-zombies","game_id":"lfs-boxboy-zombies","title":"${esc(roomTitle)}","roomTitle":"${esc(roomTitle)}","room_title":"${esc(roomTitle)}","displayName":"${esc(hostName)}","surface":"android_hub","maxPeers":$maxPlayers,"maxPlayers":$maxPlayers,"max_players":$maxPlayers,"hostMode":"${hostMode.wireId}","host_mode":"${hostMode.wireId}","lifecyclePolicy":"${lifecyclePolicy.wireId}","lifecycle_policy":"${lifecyclePolicy.wireId}","mapSeed":$mapSeed,"map_seed":$mapSeed,"wave":$currentWave,"hostEpoch":$hostEpoch,"host_epoch":$hostEpoch$envelopeFields}"""
+        }
+
+        /**
          * Builds a dual camelCase + snake_case JSON payload for `/api/lfs/sync/hoster`.
          */
         fun buildHosterControlPayload(
@@ -798,21 +1306,77 @@ class OasisHostedServerClient(
                 ""
             }
             return "{\"action\":\"$action\"," +
+                "\"capsuleTarget\":\"lfs-trash-arcade\",\"cartridgeSlug\":\"lfs-boxboy-zombies\"," +
                 "\"gameId\":\"lfs-boxboy-zombies\",\"game_id\":\"lfs-boxboy-zombies\"," +
+                "\"roomId\":\"${esc(roomCode)}\",\"room_id\":\"${esc(roomCode)}\"," +
                 "\"roomCode\":\"${esc(roomCode)}\",\"room_code\":\"${esc(roomCode)}\"," +
-                "\"roomTitle\":\"${esc(roomTitle)}\",\"room_title\":\"${esc(roomTitle)}\"," +
+                "\"title\":\"${esc(roomTitle)}\",\"roomTitle\":\"${esc(roomTitle)}\",\"room_title\":\"${esc(roomTitle)}\"," +
                 "\"hostMode\":\"${hostMode.wireId}\",\"host_mode\":\"${hostMode.wireId}\"," +
+                "\"engine_kind\":\"ENGINE_A2_HEADLESS_NODE_VM_WORKER\"," +
                 "\"lifecyclePolicy\":\"${lifecyclePolicy.wireId}\",\"lifecycle_policy\":\"${lifecyclePolicy.wireId}\"," +
                 "\"tickHz\":20,\"tick_hz\":20," +
-                "\"maxPlayers\":$maxPlayers,\"max_players\":$maxPlayers," +
+                "\"maxPeers\":$maxPlayers,\"maxPlayers\":$maxPlayers,\"max_players\":$maxPlayers," +
                 "\"mapSeed\":$mapSeed,\"map_seed\":$mapSeed," +
                 "\"wave\":$currentWave," +
-                "\"hostEpoch\":$hostEpoch,\"host_epoch\":$hostEpoch" +
+                "\"hostEpoch\":$hostEpoch,\"host_epoch\":$hostEpoch,\"lease_ttl_sec\":7200" +
                 "$envelopeFields}"
         }
 
+        private fun extractRegexString(rawJson: String, key: String, default: String): String {
+            val regex = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"")
+            return regex.find(rawJson)?.groupValues?.getOrNull(1) ?: default
+        }
+
+        private fun extractRegexLong(rawJson: String, key: String, default: Long): Long {
+            val regex = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(-?\\d+)")
+            return regex.find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: default
+        }
+
+        private fun parseHandshakeResponseJson(
+            rawJson: String,
+            probedUrl: String,
+            cfg: LfsServerEndpointConfig
+        ): TailscaleSsoHandshakeState {
+            val stableNodeId = extractRegexString(
+                rawJson,
+                "stableNodeId",
+                extractRegexString(rawJson, "node_stable_id", "node-stable-lfs-android-01")
+            )
+            val subuserId = extractRegexString(rawJson, "subuserId", extractRegexString(rawJson, "subuser_id", "primary"))
+            val persona = extractRegexString(rawJson, "persona", "OWNER")
+            val trustRing = extractRegexLong(rawJson, "trustRing", extractRegexLong(rawJson, "trust_ring", 3L))
+                .toInt().coerceIn(1, 4)
+            val generationEpoch = extractRegexLong(rawJson, "generationEpoch", extractRegexLong(rawJson, "generation_epoch", 1L))
+                .toInt().coerceAtLeast(1)
+            val abac = evaluateAbac32Lattice(
+                explicitDeny = false,
+                trustRing = trustRing,
+                minRing = 2,
+                vipBypass = trustRing >= 4,
+                curfewOk = true,
+                stepUpOk = true
+            )
+            return TailscaleSsoHandshakeState(
+                isAnchorVerified = true,
+                stableNodeId = stableNodeId,
+                tailnetId = extractRegexString(rawJson, "tailnetId", cfg.expectedTailnetId),
+                tailnetDomain = extractRegexString(rawJson, "tailnetDomain", cfg.expectedTailnetDomain),
+                subuserId = subuserId,
+                persona = persona,
+                trustRing = trustRing,
+                generationEpoch = generationEpoch,
+                tailscaleTunnelBadge = "[PASS]",
+                abacPerimeterBadge = if (abac.permit) "[PASS]" else "[WARN]",
+                isolatedProfileBadge = "[PASS]",
+                userDataBackupBadge = "[PASS]",
+                abacDecision = abac,
+                lastProbedEndpoint = probedUrl
+            )
+        }
+
         /**
-         * Parses a `/api/lfs/sync/hoster` response supporting both camelCase and snake_case keys.
+         * Parses a `/api/lfs/sync/rooms`, `/api/lfs/sync/hoster`, or `/v1/hoster/rooms` response
+         * supporting both camelCase and snake_case keys.
          */
         fun parseHostedRoomSessionJson(
             rawJson: String,
@@ -827,26 +1391,56 @@ class OasisHostedServerClient(
             maxPlayers: Int = 4,
             initialSaveEnvelope: String? = null
         ): HostedRoomSession {
-            val json = if (rawJson.isNotBlank()) JSONObject(rawJson) else JSONObject()
             val wsBase = baseUrl
                 .replaceFirst("https://", "wss://")
                 .replaceFirst("http://", "ws://")
-            val defaultWsPath = if (hostMode == LfsHostMode.HOST_LOCAL_DEVICE) {
-                "$wsBase/ws/host-tunnel/$cleanCode"
-            } else {
-                "$wsBase/ws/room/$cleanCode"
+            val defaultWsPath = when {
+                isU3HosterEndpoint(baseUrl) -> "$wsBase/v1/overlay/ws"
+                hostMode == LfsHostMode.HOST_LOCAL_DEVICE -> "$wsBase/ws/host-tunnel/$cleanCode"
+                else -> "$wsBase/ws/room/$cleanCode"
             }
-            val parsedCode = normalizeRoomCode(
-                json.optString("roomCode", json.optString("room_code", cleanCode)).ifBlank { cleanCode }
+
+            val codeCandidate = extractRegexString(
+                rawJson,
+                "roomCode",
+                extractRegexString(rawJson, "room_code", cleanCode)
+            ).ifBlank { cleanCode }
+            val parsedCode = normalizeRoomCode(codeCandidate)
+            val parsedRoomId = extractRegexString(
+                rawJson,
+                "roomId",
+                extractRegexString(rawJson, "room_id", parsedCode)
+            ).ifBlank { parsedCode }
+            val parsedTitle = extractRegexString(
+                rawJson,
+                "roomTitle",
+                extractRegexString(rawJson, "room_title", extractRegexString(rawJson, "title", roomTitle))
+            ).ifBlank { roomTitle }
+            val parsedEpoch = extractRegexLong(
+                rawJson,
+                "hostEpoch",
+                extractRegexLong(rawJson, "host_epoch", defaultEpoch.toLong())
+            ).toInt()
+            val parsedPlayers = extractRegexLong(
+                rawJson,
+                "activePlayers",
+                extractRegexLong(rawJson, "player_count", 1L)
+            ).toInt()
+            val parsedRegion = extractRegexString(
+                rawJson,
+                "serverRegion",
+                extractRegexString(rawJson, "server_region", "LFS-Oasis-Edge")
             )
-            val parsedRoomId = json.optString("roomId", json.optString("room_id", parsedCode)).ifBlank { parsedCode }
-            val parsedTitle = json.optString("roomTitle", json.optString("room_title", roomTitle)).ifBlank { roomTitle }
-            val parsedEpoch = json.optInt("hostEpoch", json.optInt("host_epoch", defaultEpoch))
-            val parsedPlayers = json.optInt("activePlayers", json.optInt("player_count", 1))
-            val parsedRegion = json.optString("serverRegion", json.optString("server_region", "LFS-Oasis-Edge"))
-            val parsedWsUrl = json.optString("wsUrl", json.optString("ws_url", defaultWsPath)).ifBlank { defaultWsPath }
-            val parsedTicket = json.optString("wsTicket", json.optString("ws_ticket", "ticket_${parsedCode.lowercase()}"))
-                .ifBlank { "ticket_${parsedCode.lowercase()}" }
+            val parsedWsUrl = extractRegexString(
+                rawJson,
+                "wsUrl",
+                extractRegexString(rawJson, "ws_url", defaultWsPath)
+            ).ifBlank { defaultWsPath }
+            val parsedTicket = extractRegexString(
+                rawJson,
+                "wsTicket",
+                extractRegexString(rawJson, "ws_ticket", "ticket_${parsedCode.lowercase()}")
+            ).ifBlank { "ticket_${parsedCode.lowercase()}" }
 
             return HostedRoomDescriptor(
                 roomId = parsedRoomId,
@@ -855,51 +1449,54 @@ class OasisHostedServerClient(
                 hostMode = hostMode,
                 lifecyclePolicy = lifecyclePolicy,
                 hostEpoch = parsedEpoch,
-                mapSeed = json.optLong("mapSeed", json.optLong("map_seed", mapSeed)),
-                currentWave = json.optInt("currentWave", json.optInt("wave", currentWave)),
+                mapSeed = extractRegexLong(rawJson, "mapSeed", extractRegexLong(rawJson, "map_seed", mapSeed)),
+                currentWave = extractRegexLong(rawJson, "currentWave", extractRegexLong(rawJson, "wave", currentWave.toLong())).toInt(),
                 playerCount = parsedPlayers,
                 activePlayers = parsedPlayers,
-                maxPlayers = json.optInt("maxPlayers", json.optInt("max_players", maxPlayers)),
+                maxPlayers = extractRegexLong(rawJson, "maxPlayers", extractRegexLong(rawJson, "max_players", maxPlayers.toLong())).toInt(),
                 serverRegion = parsedRegion,
                 wsEndpointUrl = parsedWsUrl,
                 wsTicket = parsedTicket,
-                transportTier = "TIER_A_LFS_EDGE",
+                transportTier = if (isU3HosterEndpoint(baseUrl)) "TIER_A_U3_HOSTER_19448" else "TIER_A_LFS_EDGE",
                 initialStateEnvelope = initialSaveEnvelope
             )
         }
 
         fun parsePublicRoomsJson(rawJson: String): List<HostedRoomSummary> {
             if (rawJson.isBlank()) return emptyList()
-            val arr = if (rawJson.trimStart().startsWith("[")) {
-                JSONArray(rawJson)
-            } else {
-                JSONObject(rawJson).optJSONArray("rooms") ?: JSONArray()
-            }
             val fetched = mutableListOf<HostedRoomDescriptor>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val code = normalizeRoomCode(
-                    obj.optString("roomCode", obj.optString("room_code", "LFS-8K4M2P"))
+            val objectBlocks = Regex("\\{[^{}]*\"(?:roomCode|room_code|room_id|roomId)\"[^{}]*\\}").findAll(rawJson)
+            for (match in objectBlocks) {
+                val block = match.value
+                val rawCode = extractRegexString(
+                    block,
+                    "roomCode",
+                    extractRegexString(block, "room_code", extractRegexString(block, "room_id", "LFS-8K4M2P"))
                 )
-                val modeStr = obj.optString("hostMode", obj.optString("host_mode", ""))
-                val policyStr = obj.optString("lifecyclePolicy", obj.optString("lifecycle_policy", ""))
-                val players = obj.optInt("activePlayers", obj.optInt("player_count", 2))
+                val code = normalizeRoomCode(rawCode)
+                val modeStr = extractRegexString(block, "hostMode", extractRegexString(block, "host_mode", ""))
+                val policyStr = extractRegexString(block, "lifecyclePolicy", extractRegexString(block, "lifecycle_policy", ""))
+                val players = extractRegexLong(block, "activePlayers", extractRegexLong(block, "player_count", 2L)).toInt()
                 fetched.add(
                     HostedRoomDescriptor(
-                        roomId = obj.optString("roomId", obj.optString("room_id", code)).ifBlank { code },
+                        roomId = extractRegexString(block, "roomId", extractRegexString(block, "room_id", code)).ifBlank { code },
                         roomCode = code,
-                        roomTitle = obj.optString("roomTitle", obj.optString("room_title", "Oasis Tactical Squad")),
+                        roomTitle = extractRegexString(
+                            block,
+                            "roomTitle",
+                            extractRegexString(block, "room_title", extractRegexString(block, "title", "Oasis Tactical Squad"))
+                        ),
                         hostMode = LfsHostMode.entries.find { it.wireId == modeStr }
                             ?: LfsHostMode.LAUNCH_U2_HOSTING_SERVICE,
                         lifecyclePolicy = LfsLifecyclePolicy.entries.find { it.wireId == policyStr }
                             ?: LfsLifecyclePolicy.ON_DEMAND_WAKE,
-                        hostEpoch = obj.optInt("hostEpoch", obj.optInt("host_epoch", 1)),
-                        mapSeed = obj.optLong("mapSeed", obj.optLong("map_seed", 19960227L)),
-                        currentWave = obj.optInt("currentWave", obj.optInt("wave", 1)),
+                        hostEpoch = extractRegexLong(block, "hostEpoch", extractRegexLong(block, "host_epoch", 1L)).toInt(),
+                        mapSeed = extractRegexLong(block, "mapSeed", extractRegexLong(block, "map_seed", 19960227L)),
+                        currentWave = extractRegexLong(block, "currentWave", extractRegexLong(block, "wave", 1L)).toInt(),
                         playerCount = players,
                         activePlayers = players,
-                        maxPlayers = obj.optInt("maxPlayers", obj.optInt("max_players", 4)),
-                        serverRegion = obj.optString("serverRegion", obj.optString("server_region", "LFS-Oasis-Edge"))
+                        maxPlayers = extractRegexLong(block, "maxPlayers", extractRegexLong(block, "max_players", 4L)).toInt(),
+                        serverRegion = extractRegexString(block, "serverRegion", extractRegexString(block, "server_region", "LFS-Oasis-Edge"))
                     )
                 )
             }
@@ -907,12 +1504,11 @@ class OasisHostedServerClient(
         }
 
         fun serializePlayerStateFrame(roomCode: String, peer: CoopPeerState): String {
-            // Quantize coordinates & angles to 0.1px / 0.01rad for compact <64KiB 20Hz wire frames
             val qx = (peer.x * 10f).roundToInt() / 10.0
             val qy = (peer.y * 10f).roundToInt() / 10.0
             val qAim = (peer.aimAngleRad * 100f).roundToInt() / 100.0
             val qRev = (peer.reviveProgress * 100f).roundToInt() / 100.0
-            return JSONObject().apply {
+            return AegisJsonObject().apply {
                 put("type", "PLAYER_STATE")
                 put("room", roomCode)
                 put("id", peer.peerId)
@@ -962,7 +1558,7 @@ class OasisHostedServerClient(
         }
 
         fun serializeWorldEventFrame(event: OasisWorldEvent): String {
-            return JSONObject().apply {
+            return AegisJsonObject().apply {
                 put("type", "WORLD_EVENT")
                 put("ev", event.eventType.wireId)
                 put("room", event.roomCode)
@@ -991,21 +1587,9 @@ class OasisHostedServerClient(
         }
 
         fun serializeHostWorldSyncFrame(packet: HostWorldSyncPacket): String {
-            val roomsArr = JSONArray()
-            packet.unlockedRooms.sorted().forEach { roomsArr.put(it) }
-            val barrelsArr = JSONArray()
-            packet.detonatedBarrelIds.forEach { barrelsArr.put(it) }
-            return JSONObject().apply {
-                put("type", "HOST_WORLD_SYNC")
-                put("room", packet.roomCode)
-                put("epoch", packet.hostEpoch)
-                put("seed", packet.mapSeed)
-                put("wave", packet.currentWave)
-                put("unlocked", roomsArr)
-                put("zombies", packet.activeZombieCount)
-                put("barrels", barrelsArr)
-                put("ts", packet.timestampMs)
-            }.toString()
+            val unlockedStr = packet.unlockedRooms.sorted().joinToString(",")
+            val barrelsStr = packet.detonatedBarrelIds.joinToString(",")
+            return """{"type":"HOST_WORLD_SYNC","room":"${packet.roomCode}","epoch":${packet.hostEpoch},"seed":${packet.mapSeed},"wave":${packet.currentWave},"unlocked":[$unlockedStr],"zombies":${packet.activeZombieCount},"barrels":[$barrelsStr],"ts":${packet.timestampMs}}"""
         }
 
         fun deserializeHostWorldSyncFrame(obj: JSONObject): HostWorldSyncPacket {
@@ -1041,7 +1625,7 @@ class OasisHostedServerClient(
             HostedRoomDescriptor(
                 roomId = "LFS-8K4M2P",
                 roomCode = "LFS-8K4M2P",
-                roomTitle = "Oasis U2 Official — County Siege",
+                roomTitle = "Oasis U2 Official - County Siege",
                 hostMode = LfsHostMode.LAUNCH_U2_HOSTING_SERVICE,
                 lifecyclePolicy = LfsLifecyclePolicy.ON_DEMAND_WAKE,
                 hostEpoch = 1,

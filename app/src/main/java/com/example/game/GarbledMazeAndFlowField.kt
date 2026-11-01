@@ -345,7 +345,7 @@ object MazeDirector {
 
             if (nodes.size < beforeCount) {
                 val evictedCount = beforeCount - nodes.size
-                eventLog += " • Evicted $evictedCount distant room(s) (>2 doorways behind)"
+                eventLog += " | Evicted $evictedCount distant room(s) (>2 doorways behind)"
                 mapNeedsPillarSync = true
             }
         } else {

@@ -150,7 +150,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private class LiveInputState {
-    // Direct World Viewport Mouse/Touch Pointer Aiming (360° free-aim on the city canvas)
+    // Direct World Viewport Mouse/Touch Pointer Aiming (360 deg free-aim on the city canvas)
     @Volatile var pointerAimActive: Boolean = false
     @Volatile var pointerAimAngleRad: Float = 0f
     @Volatile var pointerFireHold: Boolean = false
@@ -200,6 +200,7 @@ fun GameScreen(
     val dailyDirectives by viewModel.dailyDirectives.collectAsStateWithLifecycle()
     val accountDeletionStatus by viewModel.accountDeletionStatus.collectAsStateWithLifecycle()
     val driveSyncState by viewModel.driveSyncState.collectAsStateWithLifecycle()
+    val unlockedTrashArcadeRelics by viewModel.unlockedTrashArcadeRelics.collectAsStateWithLifecycle()
 
     var activeSheet by remember { mutableStateOf(ActiveEmulatorSheet.NONE) }
     var isWorldMapModalOpen by remember { mutableStateOf(false) }
@@ -209,7 +210,7 @@ fun GameScreen(
     var isHudDrawerExpanded by remember { mutableStateOf(false) }
     // Floating Touch Pad visibility (can be toggled or auto-hidden when WASD hardware keys are pressed)
     var isTouchPadVisible by remember { mutableStateOf(true) }
-    // Lightweight frame counter read ONLY inside Canvas DrawScope — zero Composable recompositions at 60 FPS
+    // Lightweight frame counter read ONLY inside Canvas DrawScope -- zero Composable recompositions at 60 FPS
     val frameTickState = remember { mutableLongStateOf(0L) }
     val focusRequester = remember { FocusRequester() }
 
@@ -681,7 +682,10 @@ fun GameScreen(
                 onRefreshPublicRooms = { viewModel.refreshPublicLfsRooms() },
                 onDisconnectLfsRoom = { viewModel.disconnectLfsRoom() },
                 onToggleSquadBot = { persona -> viewModel.toggleSquadBotPersona(persona) },
-                onFillSquadWithBots = { viewModel.fillSquadWithOasisBots() }
+                onFillSquadWithBots = { viewModel.fillSquadWithOasisBots() },
+                currentPoints = gameState.points,
+                unlockedTrashArcadeRelics = unlockedTrashArcadeRelics,
+                onProbeTailscaleHandshake = { viewModel.probeTailscaleHandshakeNow() }
             )
         }
 
@@ -1076,7 +1080,7 @@ private fun EmulatorTopRomBar(
                 )
                 EmulatorMenuChip(
                     icon = Icons.Default.Refresh,
-                    label = if (isLandscape) "PORTRAIT ⟳" else "LANDSCAPE ⟳",
+                    label = if (isLandscape) "PORTRAIT \u27F3" else "LANDSCAPE \u27F3",
                     accent = CryoCyan,
                     tag = "menu_rotate_orientation",
                     onClick = onToggleOrientation
@@ -1333,7 +1337,7 @@ private fun WeaponAndAmmoTrackerBar(
                     )
 
                     Text(
-                        text = "• HIT ${gameState.ammoTelemetry.accuracyPercent}% • RLD ${gameState.ammoTelemetry.reloadsCompleted}",
+                        text = "| HIT ${gameState.ammoTelemetry.accuracyPercent}% | RLD ${gameState.ammoTelemetry.reloadsCompleted}",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextMuted,
                         fontSize = 10.sp
@@ -1599,7 +1603,7 @@ private fun BoxBoyViewportCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                // Direct 360° World Viewport Pointer/Mouse Aiming & Firing (ignores touches in virtual pad corners!)
+                // Direct 360 deg World Viewport Pointer/Mouse Aiming & Firing (ignores touches in virtual pad corners!)
                 .pointerInput(isTouchPadVisible) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = true)
@@ -1758,25 +1762,25 @@ private fun BoxBoyViewportCanvas(
                             val badgeY = zy - z.archetype.radius - 16f
                             when (z.archetype) {
                                 ZombieArchetype.CALCIFIED_STALKER -> {
-                                    // Triangle ▲ for ranged Stalker
+                                    // Triangle \u25B2 for ranged Stalker
                                     drawLine(HighContrastYellow, Offset(zx, badgeY - 8f), Offset(zx - 8f, badgeY + 6f), 3f)
                                     drawLine(HighContrastYellow, Offset(zx - 8f, badgeY + 6f), Offset(zx + 8f, badgeY + 6f), 3f)
                                     drawLine(HighContrastYellow, Offset(zx + 8f, badgeY + 6f), Offset(zx, badgeY - 8f), 3f)
                                 }
                                 ZombieArchetype.ABYSSAL_WEAVER -> {
-                                    // Diamond ◆ for mage Weaver
+                                    // Diamond \u25C6 for mage Weaver
                                     drawLine(HighContrastCyan, Offset(zx, badgeY - 9f), Offset(zx - 9f, badgeY), 3f)
                                     drawLine(HighContrastCyan, Offset(zx - 9f, badgeY), Offset(zx, badgeY + 9f), 3f)
                                     drawLine(HighContrastCyan, Offset(zx, badgeY + 9f), Offset(zx + 9f, badgeY), 3f)
                                     drawLine(HighContrastCyan, Offset(zx + 9f, badgeY), Offset(zx, badgeY - 9f), 3f)
                                 }
                                 ZombieArchetype.DEVIL_BOSS -> {
-                                    // Double Ring ⬡ for Boss
+                                    // Double Ring \u2B21 for Boss
                                     drawCircle(HighContrastYellow, radius = 11f, center = Offset(zx, badgeY), style = Stroke(width = 3.5f))
                                     drawCircle(HighContrastWhite, radius = 5f, center = Offset(zx, badgeY))
                                 }
                                 else -> {
-                                    // Crisp Square ■ for melee Shamblers/Runners/Brutes
+                                    // Crisp Square \u25A0 for melee Shamblers/Runners/Brutes
                                     drawRect(
                                         color = HighContrastWhite,
                                         topLeft = Offset(zx - 6f, badgeY - 6f),
@@ -1894,7 +1898,7 @@ private fun BoxBoyViewportCanvas(
                 )
             }
             Text(
-                text = "WASD: Move • Click/Drag or Arrows: Aim & Fire • E: Interact • M: Atlas",
+                text = "WASD: Move | Click/Drag or Arrows: Aim & Fire | E: Interact | M: Atlas",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextMuted,
                 fontSize = 9.sp
@@ -1958,7 +1962,7 @@ private fun BoxBoyViewportCanvas(
                         color = if (hudState.isGameOver) ZombieCrimson else PhosphorGreen
                     )
                     Text(
-                        text = "WAVE ${hudState.wave} • POINTS ${hudState.points} • KILLS ${hudState.totalKills}",
+                        text = "WAVE ${hudState.wave} | POINTS ${hudState.points} | KILLS ${hudState.totalKills}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MysteryGold
                     )
@@ -2126,7 +2130,7 @@ private fun Virtual8WayDpad(
     frameTickState: LongState,
     onDirectionChanged: (Float, Float) -> Unit
 ) {
-    // Read ONLY inside the Canvas DrawScope below — dragging thumbstick or holding WASD causes zero recompositions
+    // Read ONLY inside the Canvas DrawScope below -- dragging thumbstick or holding WASD causes zero recompositions
     val knobOffsetState = remember { mutableStateOf(Offset.Zero) }
 
     Box(
@@ -2136,7 +2140,7 @@ private fun Virtual8WayDpad(
             .background(HandheldObsidian)
             .border(2.dp, PhosphorGreen.copy(alpha = 0.80f), CircleShape)
             .pointerInput(Unit) {
-                // Zero-slop continuous 360° analog pointer tracking: responds on the very first touch frame
+                // Zero-slop continuous 360 deg analog pointer tracking: responds on the very first touch frame
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val center = Offset(size.width / 2f, size.height / 2f)

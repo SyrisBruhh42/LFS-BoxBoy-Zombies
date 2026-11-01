@@ -159,7 +159,7 @@ fun TacticalTitleHubDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "2D Orthographic Bio-Noir Survival • 4-Player Co-Op • 7-Slot RPG Armor",
+                            text = "2D Orthographic Bio-Noir Survival | 4-Player Co-Op | 7-Slot RPG Armor",
                             style = MaterialTheme.typography.labelMedium,
                             color = TextMuted,
                             textAlign = TextAlign.Center
@@ -204,7 +204,7 @@ fun TacticalTitleHubDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "${gameState.points} PTS • ${gameState.currentWeapon.shortCode}",
+                                text = "${gameState.points} PTS | ${gameState.currentWeapon.shortCode}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = HandheldObsidian.copy(alpha = 0.85f)
                             )
@@ -366,33 +366,33 @@ fun InteractiveFieldManualDialog(
     var stepIndex by remember { mutableIntStateOf(0) }
     val steps = listOf(
         Triple(
-            "STEP 1 OF 3 • MOVEMENT & 360° TACTICAL AIM",
+            "STEP 1 OF 3 | MOVEMENT & 360 deg TACTICAL AIM",
             "Survive the Abyssal Metropolis with Dual-Input Precision",
             listOf(
-                "• LEFT STICK / WASD: Smooth 360° movement with corner-slide physics around walls and vehicles.",
-                "• DIRECT TOUCH AIM / ARROWS: Drag anywhere on the city viewport or hold [FIRE] to lock onto zombies.",
-                "• LIGHT-LOCK CRIT: Keep zombies inside your flashlight cone for bonus critical damage and stagger.",
-                "• QUICK RELOAD [R]: Tap the Magazine Tracker or [Y/R] before entering tight corridors."
+                "| LEFT STICK / WASD: Smooth 360 deg movement with corner-slide physics around walls and vehicles.",
+                "| DIRECT TOUCH AIM / ARROWS: Drag anywhere on the city viewport or hold [FIRE] to lock onto zombies.",
+                "| LIGHT-LOCK CRIT: Keep zombies inside your flashlight cone for bonus critical damage and stagger.",
+                "| QUICK RELOAD [R]: Tap the Magazine Tracker or [Y/R] before entering tight corridors."
             )
         ),
         Triple(
-            "STEP 2 OF 3 • ECONOMY, FORTIFICATIONS & RPG ANVIL",
+            "STEP 2 OF 3 | ECONOMY, FORTIFICATIONS & RPG ANVIL",
             "Turn Survival Points & Abyssal Scrap into Unstoppable Firepower",
             listOf(
-                "• MYSTERY BOX & WALL BUYS: Approach glowing stations and tap [ACT / B] to unlock new weapons and Perks.",
-                "• BARRELS & CRYO TRAPS [X]: Drop Red Explosive Barrels or Cryo Spike Traps in choke points to shatter hordes.",
-                "• PACK-A-PUNCH & 7-SLOT ARMOR: Upgrade weapons to Mk-5 and forge 7-Slot RPG Armor pieces in the Anvil modal.",
-                "• DEPTH ESCROW VAULT: Bank surplus points in the Anvil so your next run starts with a massive head start."
+                "| MYSTERY BOX & WALL BUYS: Approach glowing stations and tap [ACT / B] to unlock new weapons and Perks.",
+                "| BARRELS & CRYO TRAPS [X]: Drop Red Explosive Barrels or Cryo Spike Traps in choke points to shatter hordes.",
+                "| PACK-A-PUNCH & 7-SLOT ARMOR: Upgrade weapons to Mk-5 and forge 7-Slot RPG Armor pieces in the Anvil modal.",
+                "| DEPTH ESCROW VAULT: Bank surplus points in the Anvil so your next run starts with a massive head start."
             )
         ),
         Triple(
-            "STEP 3 OF 3 • 3-TIER CO-OP & AI SQUADMATES",
-            "Never Fight Alone — Online, Local LAN, or with Autonomous Bots",
+            "STEP 3 OF 3 | 3-TIER CO-OP & AI SQUADMATES",
+            "Never Fight Alone -- Online, Local LAN, or with Autonomous Bots",
             listOf(
-                "• INSTANT AI SQUADMATES: Summon @willow (Medic), @cinder (Demolitions), and @mote (Rail Scout) anytime.",
-                "• 6-CHAR ROOM CODES: Host or join 4-player squads via Cloud Relay, LAN Wi-Fi, or Tailscale Private Mesh.",
-                "• SQUAD REVIVE SYSTEM: Stand inside a downed teammate's green revive circle to bring them back into the fight.",
-                "• DAILY DIRECTIVES: Complete 3 rotating survival contracts each day in the Career Dossier for bonus points!"
+                "| INSTANT AI SQUADMATES: Summon @willow (Medic), @cinder (Demolitions), and @mote (Rail Scout) anytime.",
+                "| 6-CHAR ROOM CODES: Host or join 4-player squads via Cloud Relay, LAN Wi-Fi, or Tailscale Private Mesh.",
+                "| SQUAD REVIVE SYSTEM: Stand inside a downed teammate's green revive circle to bring them back into the fight.",
+                "| DAILY DIRECTIVES: Complete 3 rotating survival contracts each day in the Career Dossier for bonus points!"
             )
         )
     )
@@ -470,7 +470,7 @@ fun InteractiveFieldManualDialog(
                     ),
                     modifier = Modifier.testTag("field_manual_next_button")
                 ) {
-                    Text("NEXT BRIEFING →", fontWeight = FontWeight.Bold)
+                    Text("NEXT BRIEFING ->", fontWeight = FontWeight.Bold)
                 }
             } else {
                 Button(
@@ -498,7 +498,7 @@ fun CareerDossierAndDirectivesDialog(
 ) {
     EmulatorModalContainer(
         title = "CAREER DOSSIER & DAILY SURVIVAL DIRECTIVES",
-        subtitle = "Lifetime Combat Record • Rank: ${careerDossier.careerRankTitle}",
+        subtitle = "Lifetime Combat Record | Rank: ${careerDossier.careerRankTitle}",
         onDismiss = onDismiss
     ) {
         // Daily Directives Section
@@ -540,7 +540,7 @@ fun CareerDossierAndDirectivesDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "+${directive.rewardPoints} PTS • +${directive.rewardScrap} SCRAP",
+                            text = "+${directive.rewardPoints} PTS | +${directive.rewardScrap} SCRAP",
                             style = MaterialTheme.typography.labelSmall,
                             color = CryoCyan,
                             fontWeight = FontWeight.Bold
@@ -713,7 +713,7 @@ fun StoreSettingsPrivacyAndAccountDialog(
 
     EmulatorModalContainer(
         title = "SETTINGS, AUDIO, PRIVACY & ACCOUNT",
-        subtitle = "Procedural PCM SFX • Tactile Haptics • Play Store Data Safety & Account Controls",
+        subtitle = "Procedural PCM SFX | Tactile Haptics | Play Store Data Safety & Account Controls",
         onDismiss = onDismiss
     ) {
         // 1. Audio & Tactile Haptics Section
@@ -1027,22 +1027,22 @@ fun PrivacyDataSafetyCardContent() {
                 )
             }
             Text(
-                text = "• Local Encryption: Offline save slots and P2P capsules are encrypted on-device with AES-256-GCM (PBKDF2-HMAC-SHA256).",
+                text = "| Local Encryption: Offline save slots and P2P capsules are encrypted on-device with AES-256-GCM (PBKDF2-HMAC-SHA256).",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextCrisp
             )
             Text(
-                text = "• Optional Cloud Sync: Google Sign-In is 100% optional. When signed in, only your game save slots, controller profiles, and active co-op room state are stored in Firebase Firestore under your authenticated UID.",
+                text = "| Optional Cloud Sync: Google Sign-In is 100% optional. When signed in, only your game save slots, controller profiles, and active co-op room state are stored in Firebase Firestore under your authenticated UID.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextCrisp
             )
             Text(
-                text = "• P2P & Private Mesh Detection: Network interface checks (Wi-Fi/VPN/Tailscale) run strictly locally to enable low-latency co-op discovery. No browsing history or personal traffic is ever inspected or transmitted.",
+                text = "| P2P & Private Mesh Detection: Network interface checks (Wi-Fi/VPN/Tailscale) run strictly locally to enable low-latency co-op discovery. No browsing history or personal traffic is ever inspected or transmitted.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextCrisp
             )
             Text(
-                text = "• Zero Ad Tracking: BoxBoy Zombies contains zero advertising SDKs, zero cross-app trackers, and never sells user data.",
+                text = "| Zero Ad Tracking: BoxBoy Zombies contains zero advertising SDKs, zero cross-app trackers, and never sells user data.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MysteryGold
             )

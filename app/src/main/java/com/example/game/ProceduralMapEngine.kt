@@ -339,7 +339,7 @@ data class ProceduralMap(
 /**
  * 5-Pass Hierarchical Procedural World Map Engine inspired by Project Zomboid & ZERO Sievert:
  * - Pass 1: Regional Biome Zoning & Cross-Border Organic Terrain Blending (`TerrainPatch`)
- * - Pass 2: Connected Watershed — Winding Rivers, Creeks, Lakes & Bridges (`RiverSegment`, `MapLake`)
+ * - Pass 2: Connected Watershed -- Winding Rivers, Creeks, Lakes & Bridges (`RiverSegment`, `MapLake`)
  * - Pass 3: Hierarchical 3-Tier Road Network (Highways, Town Streets, Dirt Trails) & Roadside Props (`WorldRoadSegment`)
  * - Pass 4: Parcel-Aligned Building Lots, Fenced Yards, L-Wing Compounds & 3D Architecture (`TownBuilding`)
  * - Pass 5: Poisson-Clustered Woodland Groves, Avenue Trees, Hedgerows & Shoreline Reeds (`WorldFoliage`)
@@ -1221,11 +1221,11 @@ object ProceduralMapEngine {
 
             // 1. Town Highway Direction Signpost at the main crossroads
             val signLabel = when (room.index) {
-                0 -> "OAKRIDGE MILL • SILVERLAKE E ->"
-                1 -> "<- OAKRIDGE W • SILVERLAKE • REDWOOD E ->"
-                2 -> "MISTHARBOR PIER • SUNVALE E ->"
-                3 -> "<- MISTHARBOR W • SUNVALE MARKET"
-                4 -> "<- SILVERLAKE W • REDWOOD RAIL DEPOT"
+                0 -> "OAKRIDGE MILL | SILVERLAKE E ->"
+                1 -> "<- OAKRIDGE W | SILVERLAKE | REDWOOD E ->"
+                2 -> "MISTHARBOR PIER | SUNVALE E ->"
+                3 -> "<- MISTHARBOR W | SUNVALE MARKET"
+                4 -> "<- SILVERLAKE W | REDWOOD RAIL DEPOT"
                 else -> "ASHENHOLLOW CATHEDRAL CITADEL"
             }
             props.add(
