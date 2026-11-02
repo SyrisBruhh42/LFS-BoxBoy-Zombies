@@ -4,6 +4,10 @@ import com.example.data.DEFAULT_WEAPONS
 import com.example.data.OasisBotPersona
 import com.example.data.PerkType
 import com.example.data.WeaponSpec
+import com.example.game.relics.PassiveRelicStackState
+import com.example.game.relics.Ror2PassiveRelicSystem
+import com.example.game.world.elona.AssembledSectionReceipt
+import com.example.game.world.elona.ElonaSocketFrontierEngine
 import com.example.network.CoopPeerState
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -169,6 +173,8 @@ data class GameSessionState(
     val playerBleedoutRemainingMs: Long = 30_000L,
     val playerReviveProgress: Float = 0f,
     val chunkSnapshot: ChunkStreamSnapshot = ChunkStreamSnapshot(),
+    val passiveRelics: PassiveRelicStackState = PassiveRelicStackState(),
+    val elonaWorldReceipt: AssembledSectionReceipt = ElonaSocketFrontierEngine.generateInitialWorldReceipt(19960227L),
     val clockMs: Long = 0L,
     val isPaused: Boolean = false,
     val isGameOver: Boolean = false,
@@ -320,6 +326,7 @@ class BoxBoyGameEngine {
         val enemyProjectiles = state.enemyProjectiles.map { it.copy() }.toMutableList()
         val elementalPuddles = state.elementalPuddles.map { it.copy() }.toMutableList()
         val lootDrops = state.lootDrops.toMutableList()
+        var passiveRelics = state.passiveRelics
 
         val dtSec = scaledDeltaMs / 1000f
 
@@ -628,6 +635,25 @@ class BoxBoyGameEngine {
                             lootDrops = lootDrops,
                             banners = banners
                         )
+                        // Track 6: Risk of Rain 2 Drop-Only Passive Skill Relic auto-stacking on Devil Boss or Combo Milestone
+                        val droppedRelic = Ror2PassiveRelicSystem.rollRareRelicDrop(
+                            wave = state.wave,
+                            isBossKill = z.archetype == ZombieArchetype.DEVIL_BOSS,
+                            isComboMilestone = comboCount > 0 && comboCount % 8 == 0,
+                            seed = state.mapSeed xor (totalKills.toLong() * 31L) xor clockMs
+                        )
+                        if (droppedRelic != null) {
+                            passiveRelics = Ror2PassiveRelicSystem.collectRelicDrop(passiveRelics, droppedRelic, 1)
+                            val newCount = passiveRelics.countOf(droppedRelic)
+                            banners.add(
+                                FloatingBanner(
+                                    text = "RELIC: ${droppedRelic.displayName} (x$newCount)",
+                                    x = z.x,
+                                    y = z.y - 28f,
+                                    colorHex = droppedRelic.colorHex
+                                )
+                            )
+                        }
                     }
                 }
 
@@ -1310,6 +1336,7 @@ class BoxBoyGameEngine {
             playerBleedoutRemainingMs = playerBleedoutMs,
             playerReviveProgress = playerReviveProg,
             chunkSnapshot = chunkSnapshot,
+            passiveRelics = passiveRelics,
             clockMs = clockMs,
             isGameOver = isGameOver,
             statusToast = statusToast

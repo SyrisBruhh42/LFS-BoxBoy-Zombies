@@ -209,28 +209,32 @@ class SparseWorldStateCache {
 
     @Synchronized
     fun serializeCompactJson(): String {
-        val root = JSONObject()
-        root.put("v", 1)
-        val chunksArr = JSONArray()
-        for ((chunkKey, tileMap) in mutationsByChunk) {
-            val chunkObj = JSONObject()
-            chunkObj.put("cx", chunkKey.first)
-            chunkObj.put("cy", chunkKey.second)
-            val mutArr = JSONArray()
-            for (m in tileMap.values) {
-                val mObj = JSONObject()
-                mObj.put("tx", m.tileX)
-                mObj.put("ty", m.tileY)
-                mObj.put("t", m.mutationType.name)
-                mObj.put("v", m.intValue)
-                if (m.metadata.isNotEmpty()) mObj.put("m", m.metadata)
-                mutArr.put(mObj)
+        return buildString {
+            append("{\"v\":1,\"chunks\":[")
+            var firstChunk = true
+            for ((chunkKey, tileMap) in mutationsByChunk) {
+                if (!firstChunk) append(',')
+                firstChunk = false
+                append("{\"cx\":").append(chunkKey.first)
+                append(",\"cy\":").append(chunkKey.second)
+                append(",\"d\":[")
+                var firstMut = true
+                for (m in tileMap.values) {
+                    if (!firstMut) append(',')
+                    firstMut = false
+                    append("{\"tx\":").append(m.tileX)
+                    append(",\"ty\":").append(m.tileY)
+                    append(",\"t\":\"").append(m.mutationType.name).append('"')
+                    append(",\"v\":").append(m.intValue)
+                    if (m.metadata.isNotEmpty()) {
+                        append(",\"m\":\"").append(m.metadata.replace("\"", "\\\"")).append('"')
+                    }
+                    append('}')
+                }
+                append("]}")
             }
-            chunkObj.put("d", mutArr)
-            chunksArr.put(chunkObj)
+            append("]}")
         }
-        root.put("chunks", chunksArr)
-        return root.toString()
     }
 
     @Synchronized

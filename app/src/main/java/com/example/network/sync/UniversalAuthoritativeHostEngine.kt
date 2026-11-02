@@ -75,27 +75,25 @@ object UniversalAuthoritativeHostEngine {
         stateCache: SparseWorldStateCache,
         currentWave: Int
     ): String {
-        val root = JSONObject()
-        root.put("proto", PROTOCOL_VERSION)
-        root.put("wave", currentWave)
-        root.put("seed", worldReceipt.seed)
-        root.put("hash", worldReceipt.topologyHash)
-
-        val nodesArr = JSONArray()
-        for (n in worldReceipt.placedNodes) {
-            val nObj = JSONObject()
-            nObj.put("id", n.nodeId)
-            nObj.put("cid", n.componentId)
-            nObj.put("gx", n.gridX)
-            nObj.put("gy", n.gridY)
-            nObj.put("rot", n.rotationSteps)
-            nObj.put("u", n.unlocked)
-            nodesArr.put(nObj)
+        val encoded = buildString {
+            append("{\"proto\":\"").append(PROTOCOL_VERSION).append('"')
+            append(",\"wave\":").append(currentWave)
+            append(",\"seed\":").append(worldReceipt.seed)
+            append(",\"hash\":\"").append(worldReceipt.topologyHash).append('"')
+            append(",\"nodes\":[")
+            for (i in worldReceipt.placedNodes.indices) {
+                if (i > 0) append(',')
+                val n = worldReceipt.placedNodes[i]
+                append("{\"id\":\"").append(n.nodeId).append('"')
+                append(",\"cid\":\"").append(n.componentId).append('"')
+                append(",\"gx\":").append(n.gridX)
+                append(",\"gy\":").append(n.gridY)
+                append(",\"rot\":").append(n.rotationSteps)
+                append(",\"u\":").append(n.unlocked)
+                append('}')
+            }
+            append("],\"stateDelta\":").append(stateCache.serializeCompactJson()).append('}')
         }
-        root.put("nodes", nodesArr)
-        root.put("stateDelta", JSONObject(stateCache.serializeCompactJson()))
-
-        val encoded = root.toString()
         require(encoded.toByteArray(Charsets.UTF_8).size <= ElonaSocketFrontierEngine.MAX_SYNC_PAYLOAD_BYTES) {
             "Hot-join envelope exceeded 15 KB budget"
         }

@@ -1999,27 +1999,82 @@ private fun BoxBoyViewportCanvas(
                 .padding(8.dp)
         )
 
-        // Top-Center Nearby Interactive Station / Loot Prompt Banner
+        // Top-Center Nearby Interactive Station / Borderlands 2 Swap-on-Spot Comparison Prompt
         val nearbyStation = hudState.nearbyStation
         val nearbyLoot = hudState.nearbyLootDrop
         if (nearbyStation != null || nearbyLoot != null) {
-            Box(
+            val swapCard = nearbyLoot?.weaponPayload?.let { candidateWeapon ->
+                com.example.game.loot.borderlands.SwapOnSpotLoadoutManager.buildWeaponComparisonCard(
+                    equipped = hudState.activeModularWeaponForCurrentSlot,
+                    candidate = candidateWeapon
+                )
+            }
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 8.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(HandheldObsidian.copy(alpha = 0.86f))
+                    .background(HandheldObsidian.copy(alpha = 0.90f))
                     .border(1.5.dp, MysteryGold, RoundedCornerShape(8.dp))
                     .clickable { onTriggerInteract() }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
                     text = nearbyStation?.let { "[PRESS E / TAP B] ${it.label}" }
-                        ?: "[PRESS E / TAP] INSPECT ${nearbyLoot?.displayTitle}",
+                        ?: "[PRESS E / TAP] SWAP ON SPOT: ${nearbyLoot?.displayTitle}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MysteryGold,
                     fontWeight = FontWeight.Bold
                 )
+                if (swapCard != null) {
+                    Text(
+                        text = "${swapCard.manufacturerName} | ${swapCard.elementalAffinity.name} | ${swapCard.statDeltas.joinToString(" · ") { "${it.label} ${it.arrowBadge}${it.candidateFormatted}" }}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CryoCyan,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+
+        // Bottom-Center Risk of Rain 2 Drop-Only Passive Relic Ribbon
+        val hudView = com.example.ui.hud.SwapCardAndRelicRibbonHud.buildHudViewState(
+            currencyPoints = hudState.points,
+            comboStreak = hudState.comboCount,
+            comboMultiplier = (1 + hudState.comboCount / 5).coerceAtMost(8).toFloat(),
+            relicState = hudState.passiveRelics,
+            transport = com.example.network.p2p.OfflineHostTransportKind.WIFI_LAN_HOTSPOT
+        )
+        if (hudView.relicChips.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(HandheldObsidian.copy(alpha = 0.86f))
+                    .border(1.dp, PackPurple.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .testTag("ror2_relic_ribbon"),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "RELICS:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = PackPurple,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                )
+                for (chip in hudView.relicChips) {
+                    Text(
+                        text = chip.stackBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MysteryGold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp
+                    )
+                }
             }
         }
 
