@@ -189,7 +189,8 @@ data class GameSessionState(
     val currentMaxMagSize: Int
         get() {
             val modMag = activeModularWeaponForCurrentSlot.effectiveMagSize
-            return modMag + (currentWeaponLevel - 1) * 4
+            val tierBonus = WeaponUpgradeProgression.getTierStats(currentWeaponLevel).bonusMagCapacity
+            return modMag + tierBonus
         }
 
     val currentAmmoCount: Int
@@ -223,6 +224,7 @@ class BoxBoyGameEngine {
     private var lastEntropyBreachSpawnMs = 0L
     private var clockMs = 0L
     val flowFieldServer = FlowFieldServer()
+    val deterministicParticlePool = DeterministicParticlePool(capacity = 256)
 
     fun stepFrame(
         state: GameSessionState,
@@ -497,8 +499,9 @@ class BoxBoyGameEngine {
         }
 
         val perkFireRateFactor = if (PerkType.DOUBLE_TAP in state.activePerks) 0.68f else 1.0f
+        val tierStats = WeaponUpgradeProgression.getTierStats(weaponLvl)
         val effectiveCooldown = (
-            (modWeapon.effectiveFireCooldownMs * perkFireRateFactor * (1f - (weaponLvl - 1) * 0.06f)) /
+            (modWeapon.effectiveFireCooldownMs * perkFireRateFactor * tierStats.fireCooldownMultiplier) /
                 speedCfg.fireReloadMultiplier.coerceAtLeast(0.25f)
             ).toLong().coerceAtLeast(35L)
 
@@ -507,7 +510,7 @@ class BoxBoyGameEngine {
             lastFireTimestampMs = clockMs
             didFireThisTick = true
             val currentBullets = magAmmo[weapon.id] ?: effectiveMagSize
-            val papMultiplier = 1f + (weaponLvl - 1) * 0.42f
+            val papMultiplier = tierStats.damageMultiplier
             val baseShotDamage = (modWeapon.effectiveDamage * papMultiplier).roundToInt()
             var anyPelletHit = false
             var anyCritHit = false
@@ -541,12 +544,13 @@ class BoxBoyGameEngine {
 
                 // Check zombie hits along ray
                 var pierced = 0
+                val totalAllowedPierce = modWeapon.effectivePierceCount + tierStats.bonusPierceCount
                 val hitCandidates = zombies
                     .filter { pointToSegmentDistance(it.x, it.y, nx, ny, endX, endY) <= it.archetype.radius + 8f }
                     .sortedBy { hypot(it.x - nx, it.y - ny) }
 
                 for (z in hitCandidates) {
-                    if (pierced >= modWeapon.effectivePierceCount) break
+                    if (pierced >= totalAllowedPierce) break
                     anyPelletHit = true
 
                     val targetIlluminated = AbyssalChiaroscuroLightingEngine.isPointIlluminatedByPlayer(
@@ -567,7 +571,7 @@ class BoxBoyGameEngine {
 
                     z.hp -= finalHitDamage
                     pierced++
-                    if (pierced == modWeapon.effectivePierceCount) {
+                    if (pierced == totalAllowedPierce) {
                         endX = z.x
                         endY = z.y
                     }
@@ -575,13 +579,24 @@ class BoxBoyGameEngine {
                         triggerBarrelExplosion(z.x, z.y, zombies, particles, banners, radius = 95f, damage = finalHitDamage)
                     }
                     if (particles.size < 120) {
+                        deterministicParticlePool.spawnBurst(
+                            x = z.x,
+                            y = z.y,
+                            count = 2,
+                            speedMin = -120,
+                            speedMax = 120,
+                            colorHex = if (z.hp <= 0) 0xFFFF2A54 else modWeapon.magazine.elementalAffinity.colorHex,
+                            ttlMs = 320L
+                        )
                         repeat(2) {
+                            val vx = deterministicParticlePool.nextDeterministicInt(-120, 120).toFloat()
+                            val vy = deterministicParticlePool.nextDeterministicInt(-120, 120).toFloat()
                             particles.add(
                                 ParticleBurst(
                                     x = z.x,
                                     y = z.y,
-                                    vx = Random.nextInt(-120, 120).toFloat(),
-                                    vy = Random.nextInt(-120, 120).toFloat(),
+                                    vx = vx,
+                                    vy = vy,
                                     colorHex = if (z.hp <= 0) 0xFFFF2A54 else modWeapon.magazine.elementalAffinity.colorHex
                                 )
                             )
@@ -639,7 +654,7 @@ class BoxBoyGameEngine {
                 val perkReloadFactor = if (PerkType.SPEED_COLA in state.activePerks) 0.5f else 1.0f
                 val armorReloadBoost = state.armorRig.totalReloadSpeedMultiplier
                 val totalReloadMs = (
-                    (modWeapon.effectiveReloadMs * perkReloadFactor) /
+                    (modWeapon.effectiveReloadMs * perkReloadFactor * tierStats.reloadTimeMultiplier) /
                         (speedCfg.fireReloadMultiplier * armorReloadBoost).coerceAtLeast(0.25f)
                     ).toLong().coerceAtLeast(180L)
                 reloadRemainingMs = totalReloadMs
@@ -914,37 +929,19 @@ class BoxBoyGameEngine {
 
             if (!holdsStandoff && dist > z.archetype.radius + 14f) {
                 val (flowVx, flowVy) = flowFieldServer.sampleFlowVector(z.x, z.y, tx, ty)
+                val steeringResult = HordeSteeringEngine.computeHordeSteering(
+                    zombieIndex = zi,
+                    zombies = zombies,
+                    targetX = tx,
+                    targetY = ty,
+                    flowVx = flowVx,
+                    flowVy = flowVy
+                )
+                val steerX = steeringResult.steerX
+                val steerY = steeringResult.steerY
+
                 val directVx = (tx - z.x) / dist
                 val directVy = (ty - z.y) / dist
-
-                // Blend Flow-Field vector with direct line-of-sight vector for organic diagonal tracking
-                val directWeight = if (dist < 420f) 0.55f else 0.25f
-                var steerX = flowVx * (1f - directWeight) + directVx * directWeight
-                var steerY = flowVy * (1f - directWeight) + directVy * directWeight
-
-                // Soft zombie-to-zombie separation so hordes don't stack on a single pixel
-                var sepX = 0f
-                var sepY = 0f
-                val minSepDist = z.archetype.radius * 2.1f
-                for (oj in 0 until zombieCount) {
-                    if (oj == zi) continue
-                    val other = zombies[oj]
-                    val sdx = z.x - other.x
-                    val sdy = z.y - other.y
-                    if (abs(sdx) < minSepDist && abs(sdy) < minSepDist) {
-                        val sDist = hypot(sdx, sdy)
-                        if (sDist in 0.1f..minSepDist) {
-                            val push = (minSepDist - sDist) / minSepDist
-                            sepX += (sdx / sDist) * push * 0.45f
-                            sepY += (sdy / sDist) * push * 0.45f
-                        }
-                    }
-                }
-                steerX += sepX
-                steerY += sepY
-                val steerMag = hypot(steerX, steerY).coerceAtLeast(0.001f)
-                steerX /= steerMag
-                steerY /= steerMag
 
                 val step = zBaseSpeed * z.archetype.speedMultiplier * dtSec
                 val candX = z.x + steerX * step
@@ -1771,13 +1768,17 @@ class BoxBoyGameEngine {
         var pts = 0
         if (particles.size < 140) {
             repeat(12) {
+                val vx = deterministicParticlePool.nextDeterministicInt(-220, 220).toFloat()
+                val vy = deterministicParticlePool.nextDeterministicInt(-220, 220).toFloat()
+                val color = if (it % 2 == 0) 0xFFFF2A54 else 0xFFFFD166
+                deterministicParticlePool.spawn(bx, by, vx, vy, color, ttlMs = 420L)
                 particles.add(
                     ParticleBurst(
                         x = bx,
                         y = by,
-                        vx = Random.nextInt(-220, 220).toFloat(),
-                        vy = Random.nextInt(-220, 220).toFloat(),
-                        colorHex = if (it % 2 == 0) 0xFFFF2A54 else 0xFFFFD166,
+                        vx = vx,
+                        vy = vy,
+                        colorHex = color,
                         ttlMs = 420L
                     )
                 )

@@ -581,7 +581,8 @@ class BoxBoyViewModel(
         val maxMag = st.currentMaxMagSize
         if ((st.currentMagAmmo[wpn.id] ?: maxMag) < maxMag && st.reloadRemainingMs == 0L) {
             val perkReloadFactor = if (PerkType.SPEED_COLA in st.activePerks) 0.5f else 1.0f
-            val totalReloadMs = ((wpn.reloadMs * perkReloadFactor) / st.speedConfig.fireReloadMultiplier.coerceAtLeast(0.25f))
+            val tierReloadMult = com.example.game.WeaponUpgradeProgression.getTierStats(st.currentWeaponLevel).reloadTimeMultiplier
+            val totalReloadMs = ((wpn.reloadMs * perkReloadFactor * tierReloadMult) / st.speedConfig.fireReloadMultiplier.coerceAtLeast(0.25f))
                 .toLong().coerceAtLeast(180L)
             _gameState.value = st.copy(
                 reloadRemainingMs = totalReloadMs,
@@ -622,15 +623,17 @@ class BoxBoyViewModel(
         val st = _gameState.value
         val spec = DEFAULT_WEAPONS.find { it.id == weaponId } ?: return
         val curLvl = st.weaponLevels[weaponId] ?: 1
-        if (curLvl >= 5) return
-        val cost = (spec.upgradeBaseCost * curLvl)
+        if (curLvl >= com.example.game.WeaponUpgradeProgression.MAX_UPGRADE_LEVEL) return
+        val cost = com.example.game.WeaponUpgradeProgression.calculateUpgradeCost(spec.upgradeBaseCost, curLvl)
         if (st.points >= cost && weaponId in st.unlockedWeaponIds) {
             val nextLvl = curLvl + 1
+            val nextTierStats = com.example.game.WeaponUpgradeProgression.getTierStats(nextLvl)
+            val newMagCap = spec.magazineSize + nextTierStats.bonusMagCapacity
             _gameState.value = st.copy(
                 points = st.points - cost,
                 weaponLevels = st.weaponLevels + (weaponId to nextLvl),
-                currentMagAmmo = st.currentMagAmmo + (weaponId to (spec.magazineSize + (nextLvl - 1) * 4)),
-                statusToast = "UPGRADED ${spec.name} TO PACK-A-PUNCH MK-$nextLvl!"
+                currentMagAmmo = st.currentMagAmmo + (weaponId to newMagCap),
+                statusToast = "UPGRADED ${spec.name} TO PACK-A-PUNCH MK-$nextLvl! [${nextTierStats.milestonePerk}]"
             )
             recordUpgradeOrForgeEvent()
         }

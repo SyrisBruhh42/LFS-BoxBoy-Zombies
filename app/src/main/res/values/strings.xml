@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">BoxBoy Zombies</string>
+    <string name="default_web_client_id" translatable="false">VAULT_INJECTED_AT_RUNTIME</string>
 </resources>
