@@ -1,0 +1,20 @@
+--- app/src/main/java/com/example/game/ai/director/modules/FrontierPrefetchCoordinator.kt
++++ app/src/main/java/com/example/game/ai/director/modules/FrontierPrefetchCoordinator.kt
+@@ -4,7 +4,7 @@
+ import kotlinx.coroutines.CoroutineDispatcher
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+-import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.cancel
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+@@ -14,7 +14,7 @@
+ class FrontierPrefetchCoordinator(
+     private val dispatcher: CoroutineDispatcher = Dispatchers.Default
+ ) {
+-    private val scope = CoroutineScope(dispatcher + Job())
++    private val scope = CoroutineScope(dispatcher + SupervisorJob())
+
+     private val cacheMutex = Mutex()
+     private val prefetchCache = mutableMapOf<String, AiSectorBlueprintProposal>()

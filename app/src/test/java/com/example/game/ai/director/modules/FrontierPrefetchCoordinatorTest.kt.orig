@@ -1,0 +1,110 @@
+package com.example.game.ai.director.modules
+
+import com.example.game.world.elona.FrontierDoorSocket
+import com.example.game.world.elona.SocketDirection
+import com.example.game.world.elona.SocketKind
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Test
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class FrontierPrefetchCoordinatorTest {
+
+    private lateinit var coordinator: FrontierPrefetchCoordinator
+    private val testDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        coordinator = FrontierPrefetchCoordinator(testDispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        coordinator.shutdown()
+    }
+
+    private fun createDummyFrontier(id: String, x: Int, y: Int): FrontierDoorSocket {
+        return FrontierDoorSocket(
+            frontierId = id,
+            parentNodeId = "parent",
+            targetGridX = x,
+            targetGridY = y,
+            requiredEntryDirection = SocketDirection.NORTH,
+            unlockCostCurrency = 500,
+            socketKind = SocketKind.LOCKED_DEBRIS_DOOR
+        )
+    }
+
+    @Test
+    fun `prefetch coordinator limits cache to max pool size`() = runTest(testDispatcher) {
+        val doors = listOf(
+            createDummyFrontier("door1", 1, 0),
+            createDummyFrontier("door2", 0, 1),
+            createDummyFrontier("door3", -1, 0),
+            createDummyFrontier("door4", 0, -1)
+        )
+
+        coordinator.updateFrontierTargets(
+            frontiers = doors,
+            wave = 1,
+            biomeTag = "OAKRIDGE_PLAZA",
+            baseSeed = 12345L
+        )
+
+        // Let coroutines finish
+        advanceUntilIdle()
+
+        // It should only cache the first 3
+        assertEquals(3, coordinator.getCachedCount())
+
+        // The first 3 should be retrievable
+        assertNotNull(coordinator.consumePrefetchedSector("door1"))
+        assertNotNull(coordinator.consumePrefetchedSector("door2"))
+        assertNotNull(coordinator.consumePrefetchedSector("door3"))
+
+        // The 4th should be null because max size is 3
+        assertNull(coordinator.consumePrefetchedSector("door4"))
+    }
+
+    @Test
+    fun `update cancels and removes outdated targets`() = runTest(testDispatcher) {
+        val doors1 = listOf(
+            createDummyFrontier("doorA", 1, 0),
+            createDummyFrontier("doorB", 0, 1)
+        )
+
+        coordinator.updateFrontierTargets(doors1, 1, "OAKRIDGE_PLAZA", 12345L)
+        advanceUntilIdle()
+        assertEquals(2, coordinator.getCachedCount())
+
+        // Now update with a completely different set
+        val doors2 = listOf(
+            createDummyFrontier("doorC", 2, 0),
+            createDummyFrontier("doorD", 3, 0)
+        )
+
+        coordinator.updateFrontierTargets(doors2, 1, "OAKRIDGE_PLAZA", 12345L)
+        advanceUntilIdle()
+
+        assertEquals(2, coordinator.getCachedCount())
+
+        // A and B should be purged
+        assertNull(coordinator.consumePrefetchedSector("doorA"))
+        assertNull(coordinator.consumePrefetchedSector("doorB"))
+
+        // C and D should be present
+        assertNotNull(coordinator.consumePrefetchedSector("doorC"))
+        assertNotNull(coordinator.consumePrefetchedSector("doorD"))
+    }
+}
