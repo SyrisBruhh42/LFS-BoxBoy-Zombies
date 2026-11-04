@@ -1758,5 +1758,19 @@ class OasisHostedServerClient(
                 maxPlayers = 4
             )
         )
+
+        fun evaluateAuthoritativeSyncTelemetry(
+            wave: Int = 1,
+            tick: Long = 1L,
+            activeZombieCount: Int = 8
+        ): com.example.game.contracts.LiveNetSyncTelemetrySummary {
+            return com.example.game.BoxBoysLiveSubsystemBridge.evaluateNetSyncPipeline(
+                com.example.game.contracts.LiveSubsystemTickInput(
+                    tick = tick,
+                    wave = wave,
+                    activeZombieCount = activeZombieCount
+                )
+            )
+        }
     }
 }

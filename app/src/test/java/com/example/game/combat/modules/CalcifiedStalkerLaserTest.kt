@@ -9,109 +9,134 @@ import kotlin.math.PI
 class CalcifiedStalkerLaserTest {
 
     @Test
-    fun testSightlineTrajectory() {
+    fun testChargeFraction() {
         val laser = CalcifiedStalkerLaser(
-            sourceId = 1,
+            sourceZombieId = 1,
             startX = 0f,
             startY = 0f,
-            aimAngleRad = 0f, // Pointing straight right
-            range = 100f
-        )
-        assertEquals(100f, laser.endX, 0.001f)
-        assertEquals(0f, laser.endY, 0.001f)
-
-        val laser2 = CalcifiedStalkerLaser(
-            sourceId = 2,
-            startX = 0f,
-            startY = 0f,
-            aimAngleRad = (PI / 2).toFloat(), // Pointing straight down/up depending on axis, mathematically Y increases
-            range = 100f
-        )
-        assertEquals(0f, laser2.endX, 0.001f)
-        assertEquals(100f, laser2.endY, 0.001f)
-    }
-
-    @Test
-    fun testChargeStateProgression() {
-        val laser = CalcifiedStalkerLaser(
-            sourceId = 1,
-            startX = 0f,
-            startY = 0f,
+            endX = 100f,
+            endY = 100f,
             aimAngleRad = 0f,
+            chargeRemainingMs = 425L,
             totalChargeMs = 850L
         )
-        assertEquals(850L, laser.chargeRemainingMs)
-        assertEquals(0f, laser.chargeFraction, 0.001f)
 
-        assertFalse(laser.step(400L))
-        assertEquals(450L, laser.chargeRemainingMs)
-        assertEquals(400f / 850f, laser.chargeFraction, 0.001f)
+        assertEquals(0.5f, laser.chargeFraction, 0.001f)
 
-        assertTrue(laser.step(450L))
-        assertEquals(0L, laser.chargeRemainingMs)
-        assertEquals(1f, laser.chargeFraction, 0.001f)
+        laser.chargeRemainingMs = 0L
+        assertEquals(1.0f, laser.chargeFraction, 0.001f)
+
+        laser.chargeRemainingMs = 850L
+        assertEquals(0.0f, laser.chargeFraction, 0.001f)
+
+        // Test overcharge and undercharge
+        laser.chargeRemainingMs = -100L
+        assertEquals(1.0f, laser.chargeFraction, 0.001f)
+
+        laser.chargeRemainingMs = 1000L
+        assertEquals(0.0f, laser.chargeFraction, 0.001f)
     }
 
     @Test
-    fun testDodgeWindowTiming() {
+    fun testDodgeWindow() {
         val laser = CalcifiedStalkerLaser(
-            sourceId = 1,
+            sourceZombieId = 1,
             startX = 0f,
             startY = 0f,
+            endX = 100f,
+            endY = 100f,
             aimAngleRad = 0f,
-            totalChargeMs = 850L,
-            dodgeWindowMs = 200L
+            chargeRemainingMs = 201L,
+            totalChargeMs = 850L
         )
 
-        // Initial state, far from firing
-        assertFalse(laser.isInDodgeWindow())
+        assertFalse("Should not be in dodge window at > 200ms", laser.isWithinDodgeWindow())
 
-        // Step just before dodge window
-        laser.step(649L)
-        assertEquals(201L, laser.chargeRemainingMs)
-        assertFalse(laser.isInDodgeWindow())
+        laser.chargeRemainingMs = 200L
+        assertTrue("Should be in dodge window at exactly 200ms", laser.isWithinDodgeWindow())
 
-        // Step into dodge window
-        laser.step(1L)
-        assertEquals(200L, laser.chargeRemainingMs)
-        assertTrue(laser.isInDodgeWindow())
-
-        // Deep in dodge window
-        laser.step(100L)
-        assertEquals(100L, laser.chargeRemainingMs)
-        assertTrue(laser.isInDodgeWindow())
-
-        // Fired
-        laser.step(100L)
-        assertEquals(0L, laser.chargeRemainingMs)
-        assertFalse(laser.isInDodgeWindow())
+        laser.chargeRemainingMs = 0L
+        assertTrue("Should be in dodge window at 0ms", laser.isWithinDodgeWindow())
     }
 
     @Test
-    fun testTargetIntersectionLogic() {
+    fun testIntersectsTarget_DirectHit() {
         val laser = CalcifiedStalkerLaser(
-            sourceId = 1,
+            sourceZombieId = 1,
             startX = 0f,
             startY = 0f,
-            aimAngleRad = 0f, // Straight along X axis
-            range = 100f
+            endX = 100f,
+            endY = 0f, // Horizontal line along X-axis
+            aimAngleRad = 0f
         )
 
-        // Target exactly on the line
+        // Target right on the line
         assertTrue(laser.intersectsTarget(50f, 0f, 10f))
-
+        
         // Target slightly off, but within radius
-        assertTrue(laser.intersectsTarget(50f, 9f, 10f))
+        assertTrue(laser.intersectsTarget(50f, 5f, 10f))
+        
+        // Target just barely touching
+        assertTrue(laser.intersectsTarget(50f, 10f, 10f))
+    }
 
-        // Target slightly off, outside radius
-        assertFalse(laser.intersectsTarget(50f, 11f, 10f))
+    @Test
+    fun testIntersectsTarget_Miss() {
+        val laser = CalcifiedStalkerLaser(
+            sourceZombieId = 1,
+            startX = 0f,
+            startY = 0f,
+            endX = 100f,
+            endY = 0f,
+            aimAngleRad = 0f
+        )
 
-        // Target before start
+        // Target completely outside
+        assertFalse(laser.intersectsTarget(50f, 20f, 10f))
+    }
+
+    @Test
+    fun testIntersectsTarget_PastEndpoints() {
+        val laser = CalcifiedStalkerLaser(
+            sourceZombieId = 1,
+            startX = 0f,
+            startY = 0f,
+            endX = 100f,
+            endY = 0f,
+            aimAngleRad = 0f
+        )
+
+        // Target before startX, but within radius of start point
         assertTrue(laser.intersectsTarget(-5f, 0f, 10f))
+        
+        // Target before startX, outside radius of start point
         assertFalse(laser.intersectsTarget(-15f, 0f, 10f))
 
-        // Target after end
+        // Target after endX, but within radius of end point
         assertTrue(laser.intersectsTarget(105f, 0f, 10f))
+        
+        // Target after endX, outside radius of end point
         assertFalse(laser.intersectsTarget(115f, 0f, 10f))
+    }
+
+    @Test
+    fun testIntersectsTarget_ZeroLengthSegment() {
+        val laser = CalcifiedStalkerLaser(
+            sourceZombieId = 1,
+            startX = 50f,
+            startY = 50f,
+            endX = 50f,
+            endY = 50f,
+            aimAngleRad = 0f
+        )
+
+        // Target directly on top
+        assertTrue(laser.intersectsTarget(50f, 50f, 10f))
+        
+        // Target within radius
+        assertTrue(laser.intersectsTarget(55f, 50f, 10f))
+        
+        // Target outside radius
+        assertFalse(laser.intersectsTarget(65f, 50f, 10f))
     }
 }

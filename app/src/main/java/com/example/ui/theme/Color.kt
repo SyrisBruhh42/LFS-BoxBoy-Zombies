@@ -32,3 +32,37 @@ val HighContrastYellow = Color(0xFFFFFF00)
 val HighContrastCyan = Color(0xFF00FFFF)
 val HighContrastWhite = Color(0xFFFFFFFF)
 val HighContrastCrimson = Color(0xFFFF3366)
+
+// Elemental & Rarity Accent Tokens for Unified BoxBoys HUD
+val RarityCommonSilver = Color(0xFFB0BEC5)
+val RarityUncommonEmerald = Color(0xFF00FF66)
+val RarityRareCryoBlue = Color(0xFF00E5FF)
+val RarityEpicAbyssalViolet = Color(0xFFB388FF)
+val RarityLegendarySolarGold = Color(0xFFFFD166)
+
+val ElementKineticGold = Color(0xFFFFD166)
+val ElementIncendiaryOrange = Color(0xFFFF5722)
+val ElementCryoFrost = Color(0xFF00E5FF)
+val ElementCorrosiveAcid = Color(0xFF00FF66)
+val ElementVoltaicShock = Color(0xFFB388FF)
+
+object BoxBoysThemePaletteCatalog {
+    val ALL_RARITY_COLORS: List<Color> = listOf(
+        RarityCommonSilver,
+        RarityUncommonEmerald,
+        RarityRareCryoBlue,
+        RarityEpicAbyssalViolet,
+        RarityLegendarySolarGold
+    )
+
+    val ALL_ELEMENT_COLORS: List<Color> = listOf(
+        ElementKineticGold,
+        ElementIncendiaryOrange,
+        ElementCryoFrost,
+        ElementCorrosiveAcid,
+        ElementVoltaicShock
+    )
+
+    fun resolveRarityColor(rarityOrdinal: Int): Color =
+        ALL_RARITY_COLORS[rarityOrdinal.coerceIn(0, ALL_RARITY_COLORS.lastIndex)]
+}

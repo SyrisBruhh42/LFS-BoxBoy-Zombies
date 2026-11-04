@@ -61,21 +61,87 @@ data class WeaponBarrelPart(
     val bonusPierce: Int,
     val bonusPellets: Int,
     val rangeBonusPx: Float
-)
+) {
+    fun toCatalogBarrelConfig(seed: Int = name.hashCode()): com.example.game.loot.borderlands.catalog.WeaponBarrelConfig {
+        val barrelType = when {
+            bonusPellets > 0 -> com.example.game.loot.borderlands.catalog.BarrelPartType.TWIN_BARREL
+            bonusPierce > 0 -> com.example.game.loot.borderlands.catalog.BarrelPartType.FLUTED
+            spreadModifier > 1.05f -> com.example.game.loot.borderlands.catalog.BarrelPartType.SAWED_OFF
+            rangeBonusPx >= 40f -> com.example.game.loot.borderlands.catalog.BarrelPartType.LONG_BARREL
+            else -> com.example.game.loot.borderlands.catalog.BarrelPartType.COMPENSATOR
+        }
+        return com.example.game.loot.borderlands.catalog.WeaponBarrelPartCatalog.generateProceduralBarrel(barrelType, seed)
+    }
+}
 
 data class WeaponMagazinePart(
     val name: String,
     val magSizeBonus: Int,
     val reloadSpeedMultiplier: Float,
     val elementalAffinity: ElementalAffinity
-)
+) {
+    fun toCatalogMagazinePart(partId: Int = 1): com.example.game.loot.borderlands.catalog.WeaponMagazinePart {
+        val catAffinity = when (elementalAffinity) {
+            ElementalAffinity.KINETIC -> com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.NONE
+            ElementalAffinity.INCENDIARY -> com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.INCENDIARY
+            ElementalAffinity.VOLTAIC -> com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.VOLTAIC
+            ElementalAffinity.CORROSIVE -> com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.CORROSIVE
+            ElementalAffinity.CRYO -> com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.CRYO
+        }
+        return com.example.game.loot.borderlands.catalog.WeaponMagazinePart(
+            partId = partId,
+            name = name,
+            capacityMultiplier = (1.0f + magSizeBonus * 0.05f).coerceIn(0.5f, 2.5f),
+            reloadSpeedMultiplier = reloadSpeedMultiplier.coerceIn(0.4f, 2.5f),
+            elementalAffinity = catAffinity,
+            elementalChance = if (elementalAffinity == ElementalAffinity.KINETIC) 0.0f else 0.18f
+        )
+    }
+}
 
 data class WeaponOpticPart(
     val name: String,
     val lightLockCritMultiplier: Float,
     val lanternRangeBonusPx: Float,
     val lightLockConeBonusRad: Float
-)
+) {
+    fun toCatalogOpticPart(id: String = "OPTIC_BRIDGE"): com.example.game.loot.borderlands.catalog.WeaponOpticPart {
+        val deg = Math.toDegrees(lightLockConeBonusRad.toDouble()).toFloat().coerceIn(5f, 180f)
+        return com.example.game.loot.borderlands.catalog.WeaponOpticPart(
+            id = id,
+            displayName = name,
+            lanternRangePx = (240f + lanternRangeBonusPx).coerceIn(50f, 1500f),
+            lightLockConeDegrees = deg,
+            critMultiplier = lightLockCritMultiplier.coerceIn(1.0f, 8.0f)
+        )
+    }
+}
+
+fun com.example.game.loot.borderlands.catalog.WeaponMagazinePart.toGameMagazinePart(): WeaponMagazinePart {
+    val affinity = when (elementalAffinity) {
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.NONE,
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.EXPLOSIVE -> ElementalAffinity.KINETIC
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.INCENDIARY -> ElementalAffinity.INCENDIARY
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.VOLTAIC -> ElementalAffinity.VOLTAIC
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.CORROSIVE -> ElementalAffinity.CORROSIVE
+        com.example.game.loot.borderlands.catalog.MagazineElementalAffinity.CRYO -> ElementalAffinity.CRYO
+    }
+    return WeaponMagazinePart(
+        name = name,
+        magSizeBonus = ((capacityMultiplier - 1.0f) * 12f).roundToInt(),
+        reloadSpeedMultiplier = reloadSpeedMultiplier,
+        elementalAffinity = affinity
+    )
+}
+
+fun com.example.game.loot.borderlands.catalog.WeaponOpticPart.toGameOpticPart(): WeaponOpticPart {
+    return WeaponOpticPart(
+        name = displayName,
+        lightLockCritMultiplier = critMultiplier,
+        lanternRangeBonusPx = (lanternRangePx - 220f).coerceAtLeast(10f),
+        lightLockConeBonusRad = Math.toRadians(lightLockConeDegrees.toDouble()).toFloat().coerceIn(0.03f, 0.45f)
+    )
+}
 
 /**
  * Complete 4-part procedural weapon instance that wraps/extends a base WeaponSpec

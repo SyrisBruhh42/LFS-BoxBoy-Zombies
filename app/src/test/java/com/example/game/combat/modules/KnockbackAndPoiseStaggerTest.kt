@@ -1,74 +1,102 @@
 package com.example.game.combat.modules
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import com.example.data.DEFAULT_WEAPONS
+import com.example.game.ElementalAffinity
+import com.example.game.LootRarity
+import com.example.game.ModularWeaponInstance
+import com.example.game.WeaponBarrelPart
+import com.example.game.WeaponMagazinePart
+import com.example.game.WeaponManufacturer
+import com.example.game.WeaponOpticPart
+import com.example.game.WeaponReceiverPart
+import com.example.game.ZombieArchetype
+import com.example.game.ZombieEntity
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.PI
+import kotlin.math.hypot
 
 class KnockbackAndPoiseStaggerTest {
 
     @Test
-    fun testCalculateKnockback_Shotgun_CloseRange() {
-        val impulse = KnockbackAndPoiseStagger.calculateKnockback("Shotgun", 0f, 0f)
-        assertEquals(800f, impulse.vx, 0.001f)
-        assertEquals(0f, impulse.vy, 0.001f)
+    fun `Shotgun produces heavy knockback and stagger frames`() {
+        val shotgun = DEFAULT_WEAPONS.find { it.shortCode == "12G-SG" }!!
+        val zombie = ZombieEntity(
+            id = 1,
+            archetype = ZombieArchetype.SHAMBLER,
+            x = 0f,
+            y = 0f,
+            hp = 100,
+            maxHp = 100
+        )
+        val angleRad = 0f // Straight right
+
+        val impact = KnockbackAndPoiseStagger.computeImpact(shotgun, null, zombie, angleRad)
+
+        // Shotgun should have high base magnitude and stagger frames
+        assertTrue("Shotgun should produce heavy knockback (>= 150f)", hypot(impact.vx, impact.vy) >= 150f)
+        assertTrue("Shotgun should produce significant stagger frames (>= 10)", impact.staggerRecoveryFrames >= 10)
     }
 
     @Test
-    fun testCalculateKnockback_Shotgun_MidRange() {
-        // Distance 150 (half of 300 max range) should give half force: 400
-        // Angle PI/2 (straight up) means vy = 400, vx = 0
-        val impulse = KnockbackAndPoiseStagger.calculateKnockback("Shotgun", 150f, (PI / 2).toFloat())
-        assertEquals(0f, impulse.vx, 0.01f)
-        assertEquals(400f, impulse.vy, 0.01f)
+    fun `Korsakov manufacturer amplifies knockback and stagger`() {
+        val uzi = DEFAULT_WEAPONS.find { it.shortCode == "UZI" }!!
+        val zombie = ZombieEntity(
+            id = 2,
+            archetype = ZombieArchetype.SHAMBLER,
+            x = 0f,
+            y = 0f,
+            hp = 100,
+            maxHp = 100
+        )
+        val angleRad = 0f
+
+        val baseImpact = KnockbackAndPoiseStagger.computeImpact(uzi, null, zombie, angleRad)
+        val baseMagnitude = hypot(baseImpact.vx, baseImpact.vy)
+
+        val korsakovInstance = ModularWeaponInstance(
+            instanceId = "test-korsakov",
+            baseWeaponId = uzi.id,
+            customTitle = "Korsakov UZI",
+            rarity = LootRarity.UNCOMMON,
+            itemLevel = 1,
+            receiver = WeaponReceiverPart("Korsakov Rec", WeaponManufacturer.KORSAKOV_ARMORIES, 1f, 1f),
+            barrel = WeaponBarrelPart("Standard", 1f, 0, 0, 0f),
+            magazine = WeaponMagazinePart("Standard", 0, 1f, ElementalAffinity.KINETIC),
+            optic = WeaponOpticPart("Iron Sights", 1f, 0f, 0f)
+        )
+
+        val korsakovImpact = KnockbackAndPoiseStagger.computeImpact(uzi, korsakovInstance, zombie, angleRad)
+        val korsakovMagnitude = hypot(korsakovImpact.vx, korsakovImpact.vy)
+
+        assertTrue("Korsakov manufacturer should increase knockback magnitude", korsakovMagnitude > baseMagnitude)
+        assertTrue("Korsakov manufacturer should increase stagger frames", korsakovImpact.staggerRecoveryFrames > baseImpact.staggerRecoveryFrames)
     }
 
     @Test
-    fun testCalculateKnockback_Shotgun_Out_Of_Range() {
-        val impulse = KnockbackAndPoiseStagger.calculateKnockback("Shotgun", 350f, 0f)
-        assertEquals(0f, impulse.vx, 0.001f)
-        assertEquals(0f, impulse.vy, 0.001f)
-    }
+    fun `Devil Boss heavily resists knockback and stagger`() {
+        val shotgun = DEFAULT_WEAPONS.find { it.shortCode == "12G-SG" }!!
+        val boss = ZombieEntity(
+            id = 3,
+            archetype = ZombieArchetype.DEVIL_BOSS,
+            x = 0f,
+            y = 0f,
+            hp = 5000,
+            maxHp = 5000
+        )
+        val shambler = ZombieEntity(
+            id = 4,
+            archetype = ZombieArchetype.SHAMBLER,
+            x = 0f,
+            y = 0f,
+            hp = 100,
+            maxHp = 100
+        )
+        val angleRad = 0f
 
-    @Test
-    fun testCalculateKnockback_Korsakov() {
-        val impulse = KnockbackAndPoiseStagger.calculateKnockback("Korsakov", 0f, PI.toFloat())
-        assertEquals(-400f, impulse.vx, 0.01f)
-        assertEquals(0f, impulse.vy, 0.01f)
-    }
+        val bossImpact = KnockbackAndPoiseStagger.computeImpact(shotgun, null, boss, angleRad)
+        val shamblerImpact = KnockbackAndPoiseStagger.computeImpact(shotgun, null, shambler, angleRad)
 
-    @Test
-    fun testCalculateStagger_Shotgun() {
-        val staggerLowPoise = KnockbackAndPoiseStagger.calculateStagger("Shotgun", 50f)
-        assertTrue(staggerLowPoise.isStaggered)
-        assertEquals(30, staggerLowPoise.remainingStaggerFrames)
-
-        val staggerHighPoise = KnockbackAndPoiseStagger.calculateStagger("Shotgun", 150f)
-        assertFalse(staggerHighPoise.isStaggered)
-        assertEquals(0, staggerHighPoise.remainingStaggerFrames)
-    }
-
-    @Test
-    fun testCalculateStagger_Korsakov() {
-        val staggerLowPoise = KnockbackAndPoiseStagger.calculateStagger("Korsakov", 25f)
-        assertTrue(staggerLowPoise.isStaggered)
-        assertEquals(15, staggerLowPoise.remainingStaggerFrames)
-    }
-
-    @Test
-    fun testStepStaggerRecovery() {
-        val state = StaggerState(isStaggered = true, remainingStaggerFrames = 2)
-        val nextState1 = KnockbackAndPoiseStagger.stepStaggerRecovery(state)
-        assertTrue(nextState1.isStaggered)
-        assertEquals(1, nextState1.remainingStaggerFrames)
-
-        val nextState2 = KnockbackAndPoiseStagger.stepStaggerRecovery(nextState1)
-        assertFalse(nextState2.isStaggered)
-        assertEquals(0, nextState2.remainingStaggerFrames)
-
-        val nextState3 = KnockbackAndPoiseStagger.stepStaggerRecovery(nextState2)
-        assertFalse(nextState3.isStaggered)
-        assertEquals(0, nextState3.remainingStaggerFrames)
+        assertTrue("Boss should take significantly less knockback than Shambler", hypot(bossImpact.vx, bossImpact.vy) < hypot(shamblerImpact.vx, shamblerImpact.vy))
+        assertTrue("Boss should resist stagger completely", bossImpact.staggerRecoveryFrames == 0)
     }
 }

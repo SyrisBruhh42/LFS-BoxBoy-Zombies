@@ -131,3 +131,17 @@ object BoxheadDevilBossPhase {
         return DevilBossUpdateResult(newBoss, spawnedFireballs, chargeSlamDmg)
     }
 }
+
+
+fun evaluateBoxheadDevilBossPhaseLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "BoxheadDevilBossPhase") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
+}

@@ -14,9 +14,29 @@ enum class OperationType(val value: String) {
     WRITE("write"),
 }
 
+data class FirestoreErrorReport(
+    val operationType: OperationType,
+    val path: String?,
+    val message: String,
+    val isTransientRetryable: Boolean,
+    val jsonPayload: String
+)
+
+fun classifyFirestoreRetryability(message: String): Boolean {
+    val normalized = message.uppercase()
+    return "UNAVAILABLE" in normalized ||
+        "DEADLINE_EXCEEDED" in normalized ||
+        "ABORTED" in normalized ||
+        "RESOURCE_EXHAUSTED" in normalized
+}
+
 fun handleFirestoreError(exception: Exception, operationType: OperationType, path: String?): String {
-    val auth = FirebaseAuth.getInstance()
-    val currentUser = auth.currentUser
+    val auth = try {
+        FirebaseAuth.getInstance()
+    } catch (_: Throwable) {
+        null
+    }
+    val currentUser = auth?.currentUser
 
     val providerInfoList = currentUser?.providerData?.map { provider ->
         JSONObject().apply {
@@ -33,14 +53,20 @@ fun handleFirestoreError(exception: Exception, operationType: OperationType, pat
         put("providerInfo", JSONArray(providerInfoList))
     }
 
+    val errorMessage = exception.message ?: exception.toString()
     val errorInfoJson = JSONObject().apply {
-        put("error", exception.message ?: exception.toString())
+        put("error", errorMessage)
         put("operationType", operationType.value)
         put("path", path)
+        put("retryable", classifyFirestoreRetryability(errorMessage))
         put("authInfo", authInfoJson)
     }
 
     val jsonString = errorInfoJson.toString()
-    Log.e("FirestoreError", "Firestore Error: $jsonString")
+    try {
+        Log.e("FirestoreError", "Firestore Error: $jsonString")
+    } catch (_: Throwable) {
+        // Unit test fallback when Android Log is stubbed
+    }
     return jsonString
 }

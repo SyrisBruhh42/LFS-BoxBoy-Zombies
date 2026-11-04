@@ -347,7 +347,10 @@ object ElonaSocketFrontierEngine {
                 RoomSocketSpec(SocketDirection.WEST, SocketKind.LOCKED_DEBRIS_DOOR, unlockCostCurrency = 1500)
             )
         )
-    )
+    ) + com.example.game.BoxBoysLiveSubsystemBridge.buildAll25ElonaSectionDefs()
+
+    val DEFAULT_VAULT_LIBRARY: List<com.example.game.contracts.ElonaRoomBlueprint>
+        get() = com.example.game.BoxBoysLiveSubsystemBridge.buildAll25ElonaVaultBlueprints()
 
     /**
      * Generates an initial solvable section assembly with open frontier doors and shortcut loop gates.

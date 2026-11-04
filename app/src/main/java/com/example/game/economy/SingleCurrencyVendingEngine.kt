@@ -213,4 +213,14 @@ object SingleCurrencyVendingEngine {
             else -> 10000
         }
     }
+
+    fun evaluateLiveVendorTelemetry(wave: Int, tick: Long = 1L, currencyPoints: Int = 2500): Map<String, Double> {
+        return com.example.game.BoxBoysLiveSubsystemBridge.evaluateEconomyAndVendors(
+            com.example.game.contracts.LiveSubsystemTickInput(
+                tick = tick,
+                wave = wave,
+                currencyPoints = currencyPoints
+            )
+        )
+    }
 }

@@ -2,11 +2,19 @@ package com.example.game.economy.vendors
 
 import com.example.game.LootRarity
 import com.example.game.ModularWeaponGenerator
+import com.example.game.contracts.Fnv1a64Hasher
 import com.example.game.economy.VendingCatalogOffer
 import com.example.game.economy.VendingMachineBrand
 import kotlin.math.roundToInt
 
+data class MarcusCatalogManifest(
+    val wave: Int,
+    val offers: List<VendingCatalogOffer>,
+    val checksum: Long
+)
+
 object MarcusWeaponsVendor {
+    const val VENDOR_SLOGAN = "No refunds! Marcus Munitions Gun-Mat!"
 
     /**
      * Generates standard and Item of the Day weapon offers for Marcus Munitions.
@@ -54,4 +62,44 @@ object MarcusWeaponsVendor {
 
         return offers
     }
+
+    /**
+     * Builds a signed Marcus catalog manifest with deterministic FNV-1a verification.
+     */
+    fun generateSignedManifest(wave: Int, stepSeed: Long): MarcusCatalogManifest {
+        val offers = generateOffers(wave, stepSeed)
+        var h = Fnv1a64Hasher.initial()
+        h = Fnv1a64Hasher.mixInt(h, wave)
+        h = Fnv1a64Hasher.mixLong(h, stepSeed)
+        for (o in offers) {
+            h = Fnv1a64Hasher.mixString(h, o.offerId)
+            h = Fnv1a64Hasher.mixInt(h, o.costCurrency)
+            h = Fnv1a64Hasher.mixString(h, o.rarity.name)
+        }
+        return MarcusCatalogManifest(
+            wave = wave,
+            offers = offers,
+            checksum = h
+        )
+    }
+
+    fun computeTradeInDiscount(displacedWeaponRarity: LootRarity?, rawCost: Int): Int {
+        if (displacedWeaponRarity == null) return rawCost
+        val credit = displacedWeaponRarity.salvageScrapValue
+        return (rawCost - credit).coerceAtLeast(100)
+    }
+}
+
+
+fun evaluateMarcusWeaponsVendorLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "MarcusWeaponsVendor") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
 }

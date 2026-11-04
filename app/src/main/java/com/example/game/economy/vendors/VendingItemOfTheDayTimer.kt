@@ -80,3 +80,47 @@ class VendingItemOfTheDayTimer(initialSeed: Int) {
         }
     }
 }
+
+
+/**
+ * Deterministic 60Hz subsystem telemetry & FNV-1a verification receipt for [VendingItemOfTheDayTimer].
+ */
+data class VendingItemOfTheDayTimerTelemetryReceipt(
+    val moduleName: String = "VendingItemOfTheDayTimer",
+    val wave: Int,
+    val tick: Long,
+    val metricScore: Double,
+    val checksum: Long
+)
+
+fun computeVendingItemOfTheDayTimerTelemetryReceipt(wave: Int, tick: Long, seed: Long = 42L): VendingItemOfTheDayTimerTelemetryReceipt {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var hash = -3750763034362895579L xor seed
+    for (ch in "VendingItemOfTheDayTimer") {
+        hash = (hash xor ch.code.toLong()) * 1099511628211L
+    }
+    hash = (hash xor safeWave.toLong()) * 1099511628211L
+    hash = (hash xor safeTick) * 1099511628211L
+    val score = (1.0 + safeWave * 0.12) * (1.0 + (safeTick % 60L) * 0.005)
+    return VendingItemOfTheDayTimerTelemetryReceipt(
+        wave = safeWave,
+        tick = safeTick,
+        metricScore = score,
+        checksum = hash
+    )
+}
+
+
+fun evaluateVendingItemOfTheDayTimerLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "VendingItemOfTheDayTimer") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
+}

@@ -1,70 +1,140 @@
 package com.example.game.combat.modules
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 class ShadowStalkerAssassinsTest {
 
     @Test
-    fun testStalkerRevealedByLanternCone() {
-        val stalker = StalkerState(x = 100f, y = 0f)
-        val lantern = PlayerLantern(
-            x = 0f,
-            y = 0f,
-            facingAngleRad = 0f,
-            coneHalfSpreadRad = Math.toRadians(45.0).toFloat(),
-            rangePx = 200f
+    fun testStalkerInLanternConeUncloaks() {
+        val playerX = 100f
+        val playerY = 100f
+        val aimAngleRad = 0f // Aiming right (positive X)
+        
+        // Stalker within lantern range (440f) and within cone angle (+- 0.56 rad)
+        val dist = 200f
+        val stalkerX = playerX + dist * cos(0.2f)
+        val stalkerY = playerY + dist * sin(0.2f)
+        
+        val initialStalker = ShadowStalker(zombieId = 1, isCloaked = true, revelationDecayTimerMs = 0L, x = stalkerX, y = stalkerY)
+        
+        val result = ShadowStalkerAssassinsEngine.stepVisibility(
+            stalkers = listOf(initialStalker),
+            playerX = playerX,
+            playerY = playerY,
+            aimAngleRad = aimAngleRad,
+            isMuzzleFlashActive = false,
+            deltaMs = 16L
         )
         
-        val updated = ShadowStalkerAssassins.stepStalkers(listOf(stalker), lantern, 16L)
-        assertTrue(updated[0].isRevealed)
-        assertEquals(ShadowStalkerAssassins.REVEAL_DURATION_MS, updated[0].revelationTimerMs)
+        val updatedStalker = result.first()
+        assertFalse("Stalker should be revealed in lantern cone", updatedStalker.isCloaked)
+        assertEquals(ShadowStalkerAssassinsEngine.MAX_REVELATION_DECAY_MS, updatedStalker.revelationDecayTimerMs)
     }
 
     @Test
-    fun testStalkerOutsideLanternCone() {
-        val stalker = StalkerState(x = 0f, y = 100f) // 90 degrees, outside of 45 degree spread
-        val lantern = PlayerLantern(
-            x = 0f,
-            y = 0f,
-            facingAngleRad = 0f,
-            coneHalfSpreadRad = Math.toRadians(45.0).toFloat(),
-            rangePx = 200f
+    fun testStalkerOutsideLanternConeRemainsCloaked() {
+        val playerX = 100f
+        val playerY = 100f
+        val aimAngleRad = 0f // Aiming right (positive X)
+        
+        // Stalker within lantern range but OUTSIDE cone angle (+- 0.56 rad)
+        val dist = 200f
+        val stalkerX = playerX + dist * cos(PI.toFloat()) // Behind player
+        val stalkerY = playerY + dist * sin(PI.toFloat())
+        
+        val initialStalker = ShadowStalker(zombieId = 1, isCloaked = true, revelationDecayTimerMs = 0L, x = stalkerX, y = stalkerY)
+        
+        val result = ShadowStalkerAssassinsEngine.stepVisibility(
+            stalkers = listOf(initialStalker),
+            playerX = playerX,
+            playerY = playerY,
+            aimAngleRad = aimAngleRad,
+            isMuzzleFlashActive = false,
+            deltaMs = 16L
         )
         
-        val updated = ShadowStalkerAssassins.stepStalkers(listOf(stalker), lantern, 16L)
-        assertFalse(updated[0].isRevealed)
-    }
-    
-    @Test
-    fun testStalkerRevealedByMuzzleFlash() {
-        val stalker = StalkerState(x = 0f, y = 100f) // Outside cone
-        val lantern = PlayerLantern(
-            x = 0f,
-            y = 0f,
-            facingAngleRad = 0f,
-            coneHalfSpreadRad = Math.toRadians(45.0).toFloat(),
-            rangePx = 200f,
-            muzzleFlashBloomRadiusPx = 150f
-        )
-        
-        val updated = ShadowStalkerAssassins.stepStalkers(listOf(stalker), lantern, 16L)
-        assertTrue(updated[0].isRevealed)
+        val updatedStalker = result.first()
+        assertTrue("Stalker should remain cloaked outside lantern cone", updatedStalker.isCloaked)
     }
 
     @Test
-    fun testStalkerRevelationTimerDecays() {
-        val stalker = StalkerState(x = 500f, y = 500f, isRevealed = true, revelationTimerMs = 100L)
-        val lantern = PlayerLantern(x = 0f, y = 0f, facingAngleRad = 0f)
+    fun testStalkerNearMuzzleFlashUncloaks() {
+        val playerX = 100f
+        val playerY = 100f
+        val aimAngleRad = 0f
         
-        // Step 1: decay timer
-        val updated1 = ShadowStalkerAssassins.stepStalkers(listOf(stalker), lantern, 50L)
-        assertTrue(updated1[0].isRevealed)
-        assertEquals(50L, updated1[0].revelationTimerMs)
+        // Stalker behind player (outside cone), but within muzzle flash range (520f)
+        val dist = 400f
+        val stalkerX = playerX + dist * cos(PI.toFloat())
+        val stalkerY = playerY + dist * sin(PI.toFloat())
         
-        // Step 2: timer expires
-        val updated2 = ShadowStalkerAssassins.stepStalkers(updated1, lantern, 50L)
-        assertFalse(updated2[0].isRevealed)
-        assertEquals(0L, updated2[0].revelationTimerMs)
+        val initialStalker = ShadowStalker(zombieId = 1, isCloaked = true, revelationDecayTimerMs = 0L, x = stalkerX, y = stalkerY)
+        
+        val result = ShadowStalkerAssassinsEngine.stepVisibility(
+            stalkers = listOf(initialStalker),
+            playerX = playerX,
+            playerY = playerY,
+            aimAngleRad = aimAngleRad,
+            isMuzzleFlashActive = true,
+            deltaMs = 16L
+        )
+        
+        val updatedStalker = result.first()
+        assertFalse("Stalker should be revealed by muzzle flash", updatedStalker.isCloaked)
+        assertEquals(ShadowStalkerAssassinsEngine.MAX_REVELATION_DECAY_MS, updatedStalker.revelationDecayTimerMs)
+    }
+
+    @Test
+    fun testStalkerRevelationDecaysOverTime() {
+        val playerX = 100f
+        val playerY = 100f
+        val aimAngleRad = 0f
+        
+        // Stalker far away from player
+        val stalkerX = 1000f
+        val stalkerY = 1000f
+        
+        // Stalker was previously revealed
+        val initialStalker = ShadowStalker(
+            zombieId = 1, 
+            isCloaked = false, 
+            revelationDecayTimerMs = 50L, 
+            x = stalkerX, 
+            y = stalkerY
+        )
+        
+        // Step 1: Decay time by 30ms -> remaining 20ms
+        var result = ShadowStalkerAssassinsEngine.stepVisibility(
+            stalkers = listOf(initialStalker),
+            playerX = playerX,
+            playerY = playerY,
+            aimAngleRad = aimAngleRad,
+            isMuzzleFlashActive = false,
+            deltaMs = 30L
+        )
+        
+        var updatedStalker = result.first()
+        assertFalse("Stalker should still be revealed", updatedStalker.isCloaked)
+        assertEquals(20L, updatedStalker.revelationDecayTimerMs)
+        
+        // Step 2: Decay time by another 30ms -> should hit 0 and cloak
+        result = ShadowStalkerAssassinsEngine.stepVisibility(
+            stalkers = result,
+            playerX = playerX,
+            playerY = playerY,
+            aimAngleRad = aimAngleRad,
+            isMuzzleFlashActive = false,
+            deltaMs = 30L
+        )
+        
+        updatedStalker = result.first()
+        assertTrue("Stalker should now be cloaked after decay timer reaches 0", updatedStalker.isCloaked)
+        assertEquals(0L, updatedStalker.revelationDecayTimerMs)
     }
 }

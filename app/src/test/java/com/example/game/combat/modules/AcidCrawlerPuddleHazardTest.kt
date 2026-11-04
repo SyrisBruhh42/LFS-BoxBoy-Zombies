@@ -2,68 +2,93 @@ package com.example.game.combat.modules
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.hypot
 
 class AcidCrawlerPuddleHazardTest {
 
     @Test
-    fun testCrawlerMovement() {
-        val crawler = AcidCrawler(0f, 0f, 0.1f, 100)
-        AcidCrawlerPuddleHazard.updateCrawlerMovement(crawler, 100f, 0f, 100L)
+    fun testFrenzySpeed() {
+        val maxHp = 100
         
-        assertEquals(10f, crawler.x, 0.1f)
-        assertEquals(0f, crawler.y, 0.1f)
+        // hp > 66% => 1.0x
+        var multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(100, maxHp)
+        assertEquals(1.0f, multiplier, 0.01f)
+        
+        multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(67, maxHp)
+        assertEquals(1.0f, multiplier, 0.01f)
+        
+        // 33% < hp <= 66% => 1.35x
+        multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(66, maxHp)
+        assertEquals(1.35f, multiplier, 0.01f)
+        
+        multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(34, maxHp)
+        assertEquals(1.35f, multiplier, 0.01f)
+        
+        // hp <= 33% => 1.75x
+        multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(33, maxHp)
+        assertEquals(1.75f, multiplier, 0.01f)
+        
+        multiplier = AcidCrawlerPuddleHazardEngine.computeCrawlerSpeedMultiplier(10, maxHp)
+        assertEquals(1.75f, multiplier, 0.01f)
     }
 
     @Test
-    fun testCrawlerDeathCreatesPuddle() {
-        val crawler = AcidCrawler(50f, 50f, 0.1f, 0)
-        val puddle = AcidCrawlerPuddleHazard.handleCrawlerDeath(crawler)
+    fun testSpawnOnDeath() {
+        val crawlerX = 150f
+        val crawlerY = 250f
         
-        assertTrue(crawler.isDead)
+        val puddle = AcidCrawlerPuddleHazardEngine.spawnPuddleOnDeath(crawlerX, crawlerY)
+        
         assertNotNull(puddle)
-        assertEquals(50f, puddle!!.x, 0.1f)
-        assertEquals(50f, puddle.y, 0.1f)
+        assertEquals(150f, puddle.x, 0.01f)
+        assertEquals(250f, puddle.y, 0.01f)
+        assertEquals(6000L, puddle.remainingLifetimeMs)
     }
 
     @Test
-    fun testCrawlerDeathTwiceDoesNotCreateMultiplePuddles() {
-        val crawler = AcidCrawler(50f, 50f, 0.1f, 0)
-        val puddle1 = AcidCrawlerPuddleHazard.handleCrawlerDeath(crawler)
-        val puddle2 = AcidCrawlerPuddleHazard.handleCrawlerDeath(crawler)
-        
-        assertNotNull(puddle1)
-        assertNull(puddle2)
-    }
-
-    @Test
-    fun testPuddleDecay() {
-        val puddles = mutableListOf(
-            AcidPuddle(0f, 0f, 50f, 10, 1000L),
-            AcidPuddle(10f, 10f, 50f, 10, 2000L)
+    fun testPuddleDamageAndDecay() {
+        val puddle = AcidPuddle(
+            id = 0,
+            x = 100f,
+            y = 100f,
+            radiusPx = 45f,
+            damagePerSecond = 25f,
+            remainingLifetimeMs = 6000L
         )
         
-        AcidCrawlerPuddleHazard.updatePuddles(puddles, 1500L)
-        
-        assertEquals(1, puddles.size)
-        assertEquals(500L, puddles[0].remainingDurationMs)
-    }
-
-    @Test
-    fun testPlayerDamage() {
-        val puddles = listOf(
-            AcidPuddle(0f, 0f, 50f, 10, 1000L)
+        // Player inside puddle
+        val (activePuddles, damageReceived) = AcidCrawlerPuddleHazardEngine.stepPuddles(
+            puddles = listOf(puddle),
+            playerX = 110f, // inside (10 units away)
+            playerY = 100f,
+            deltaMs = 1000L
         )
         
-        // player inside
-        val dmgIn = AcidCrawlerPuddleHazard.calculatePuddleDamageToPlayer(0f, 0f, puddles, 1000L)
-        assertEquals(10, dmgIn)
+        assertEquals(1, activePuddles.size)
+        assertEquals(5000L, activePuddles[0].remainingLifetimeMs)
+        assertEquals(25f, damageReceived, 0.01f)
         
-        // player outside
-        val dmgOut = AcidCrawlerPuddleHazard.calculatePuddleDamageToPlayer(100f, 100f, puddles, 1000L)
-        assertEquals(0, dmgOut)
+        // Player outside puddle
+        val (activePuddles2, damageReceived2) = AcidCrawlerPuddleHazardEngine.stepPuddles(
+            puddles = listOf(puddle),
+            playerX = 200f, // outside (>45 units away)
+            playerY = 100f,
+            deltaMs = 1000L
+        )
+        
+        assertEquals(1, activePuddles2.size)
+        assertEquals(5000L, activePuddles2[0].remainingLifetimeMs)
+        assertEquals(0f, damageReceived2, 0.01f)
+        
+        // Decay to zero
+        val (activePuddles3, damageReceived3) = AcidCrawlerPuddleHazardEngine.stepPuddles(
+            puddles = listOf(puddle),
+            playerX = 110f,
+            playerY = 100f,
+            deltaMs = 6000L
+        )
+        
+        assertTrue(activePuddles3.isEmpty())
     }
 }

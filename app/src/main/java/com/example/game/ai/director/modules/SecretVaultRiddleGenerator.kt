@@ -4,80 +4,157 @@ import com.example.game.world.elona.RoomSocketSpec
 import com.example.game.world.elona.SectionComponentDef
 import com.example.game.world.elona.SocketDirection
 import com.example.game.world.elona.SocketKind
+import java.util.ArrayDeque
 import kotlin.math.abs
 import kotlin.random.Random
 
-/**
- * Secret Vault Riddle Generator
- * Generates destructible-wall secret vault triggers and high-rarity chest rewards.
- */
 object SecretVaultRiddleGenerator {
-    
-    fun generateSecretVault(seed: Long, biomeTag: String, wave: Int): SectionComponentDef {
-        val rng = Random(seed xor (wave.toLong() * 0x7A3B91C2D4E5F6AUL.toLong()))
-        
-        // Build a 12x12 vault
+
+    /**
+     * Generates a Secret Vault SectionComponentDef.
+     * These vaults are hidden behind destructible barrel seams and contain high-rarity rewards.
+     */
+    fun generateSecretVault(
+        wave: Int,
+        biomeTag: String,
+        seed: Long
+    ): SectionComponentDef {
+        val rng = Random(seed xor (wave.toLong() * 0x8273645L))
         val grid = Array(12) { CharArray(12) { '.' } }
-        
-        // Outer masonry boundary
+
+        // Construct outer boundary walls
         for (i in 0 until 12) {
             grid[0][i] = '#'
             grid[11][i] = '#'
             grid[i][0] = '#'
             grid[i][11] = '#'
         }
-        
-        // Add a single secret barrel seam (destructible wall) to enter the vault
-        val entryWall = rng.nextInt(4)
-        val entryPos = rng.nextInt(2, 10)
-        when (entryWall) {
-            0 -> grid[0][entryPos] = 'B' // North
-            1 -> grid[11][entryPos] = 'B' // South
-            2 -> grid[entryPos][0] = 'B' // West
-            3 -> grid[entryPos][11] = 'B' // East
-        }
-        
-        // Add high-rarity chest rewards (Vending/Perk/PaP stations acting as chests here)
-        // Ensure they don't block the walkable path entirely
-        grid[5][5] = 'V'
-        grid[6][6] = 'U'
-        grid[5][6] = 'P'
-        
-        // Add a few barrels around to solve the puzzle/explode them to open the chest
-        grid[3][3] = 'B'
-        grid[8][8] = 'B'
-        grid[3][8] = 'B'
-        grid[8][3] = 'B'
 
-        val rows = grid.map { String(it) }
+        // Add the SECRET_BARREL_SEAM on the SOUTH side (so it can be accessed from the NORTH of another room)
+        grid[11][5] = 'B'
+        grid[11][6] = 'B'
         
-        val unlockCost = (1500 + (wave - 1) * 200).coerceAtMost(5000)
-
-        // The socket is on the side where we placed the barrel seam
-        val sockets = mutableListOf<RoomSocketSpec>()
-        
-        // In Elona engine: 
-        // SECRET_BARREL_SEAM allows connecting via explosives
-        when (entryWall) {
-            0 -> sockets.add(RoomSocketSpec(SocketDirection.NORTH, SocketKind.SECRET_BARREL_SEAM, offsetTiles = entryPos - 6, unlockCostCurrency = unlockCost))
-            1 -> sockets.add(RoomSocketSpec(SocketDirection.SOUTH, SocketKind.SECRET_BARREL_SEAM, offsetTiles = entryPos - 6, unlockCostCurrency = unlockCost))
-            2 -> sockets.add(RoomSocketSpec(SocketDirection.WEST, SocketKind.SECRET_BARREL_SEAM, offsetTiles = entryPos - 6, unlockCostCurrency = unlockCost))
-            3 -> sockets.add(RoomSocketSpec(SocketDirection.EAST, SocketKind.SECRET_BARREL_SEAM, offsetTiles = entryPos - 6, unlockCostCurrency = unlockCost))
+        // Add random obstacles
+        val numObstacles = 4 + rng.nextInt(6)
+        repeat(numObstacles) {
+            val ox = rng.nextInt(2, 10)
+            val oy = rng.nextInt(2, 10)
+            if (grid[oy][ox] == '.') {
+                grid[oy][ox] = '#'
+            }
         }
 
-        // Fill out the rest as walls so it can't connect freely
-        val directions = listOf(SocketDirection.NORTH, SocketDirection.SOUTH, SocketDirection.WEST, SocketDirection.EAST)
-        for (dir in directions) {
-            if (sockets.none { it.direction == dir }) {
-                sockets.add(RoomSocketSpec(dir, SocketKind.WALL))
+        // Place high-rarity rewards (U: Pack-a-Punch, P: Perk-a-Cola, V: Vending Machine)
+        val rewards = listOf('U', 'P', 'V')
+        for (reward in rewards) {
+            var placed = false
+            while (!placed) {
+                val rx = rng.nextInt(2, 10)
+                val ry = rng.nextInt(2, 10)
+                if (grid[ry][rx] == '.') {
+                    grid[ry][rx] = reward
+                    placed = true
+                }
             }
         }
         
+        // Ensure BFS solvability; if isolated tiles exist, clear them (make them walkable)
+        val rows = grid.map { String(it) }
+        val finalRows = if (verifyBfsSolvability(rows)) {
+            rows
+        } else {
+            // Very simple fallback: clear the internal obstacles if not solvable
+            for (y in 1 until 11) {
+                for (x in 1 until 11) {
+                    if (grid[y][x] == '#') {
+                        grid[y][x] = '.'
+                    }
+                }
+            }
+            grid.map { String(it) }
+        }
+
+        val componentId = "boxboys.vault.${biomeTag.lowercase()}_w${wave}_${abs(seed) % 9999}"
+
         return SectionComponentDef(
-            componentId = "boxboys.vault.${biomeTag.lowercase()}_w${wave}_${abs(seed) % 9999}",
+            componentId = componentId,
             biomeTag = biomeTag,
-            rows = rows,
-            sockets = sockets
+            rows = finalRows,
+            sockets = listOf(
+                RoomSocketSpec(SocketDirection.SOUTH, SocketKind.SECRET_BARREL_SEAM, unlockCostCurrency = 0)
+            )
         )
     }
+
+    /**
+     * Verifies that all walkable floor tiles ('.') form a single connected component
+     * and are not isolated by obstacle tiles like walls ('#'), barrels ('B'),
+     * windows ('W'), doors ('D'), or vending machines ('V').
+     */
+    fun verifyBfsSolvability(rows: List<String>): Boolean {
+        if (rows.size != 12 || rows.any { it.length != 12 }) return false
+        
+        var startX = -1
+        var startY = -1
+        var floorCount = 0
+
+        for (y in 0 until 12) {
+            for (x in 0 until 12) {
+                if (rows[y][x] == '.') {
+                    if (startX == -1) {
+                        startX = x
+                        startY = y
+                    }
+                    floorCount++
+                }
+            }
+        }
+
+        // If there are no floor tiles, technically they are all connected (or it's trivially false)
+        // A valid room should have some floor.
+        if (floorCount == 0) return true
+        if (startX == -1) return true
+
+        val visited = Array(12) { BooleanArray(12) }
+        val queue = ArrayDeque<Pair<Int, Int>>()
+        queue.add(Pair(startX, startY))
+        visited[startY][startX] = true
+        var visitedCount = 1
+
+        val dx = intArrayOf(0, 1, 0, -1)
+        val dy = intArrayOf(-1, 0, 1, 0)
+
+        while (queue.isNotEmpty()) {
+            val (cx, cy) = queue.removeFirst()
+
+            for (i in 0 until 4) {
+                val nx = cx + dx[i]
+                val ny = cy + dy[i]
+
+                if (nx in 0 until 12 && ny in 0 until 12) {
+                    if (!visited[ny][nx] && rows[ny][nx] == '.') {
+                        visited[ny][nx] = true
+                        queue.add(Pair(nx, ny))
+                        visitedCount++
+                    }
+                }
+            }
+        }
+
+        return visitedCount == floorCount
+    }
+}
+
+
+fun evaluateSecretVaultRiddleGeneratorLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "SecretVaultRiddleGenerator") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
 }

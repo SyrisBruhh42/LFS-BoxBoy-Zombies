@@ -1,8 +1,11 @@
 package com.example.game.combat.modules
 
+import com.example.game.ZombieEntity
+import com.example.game.ZombieArchetype
+import com.example.game.EnemyProjectile
+import com.example.game.ElementalAffinity
+import com.example.game.ParticleBurst
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.hypot
@@ -10,70 +13,89 @@ import kotlin.math.hypot
 class AbyssalWeaverBlinkMageTest {
 
     @Test
-    fun testBlinkStateChangesAwayFromPlayer() {
-        val mage = AbyssalWeaverBlinkMage(x = 100f, y = 100f)
-        val playerX = 150f
-        val playerY = 100f // Distance 50 < 400 (preferred engagement range)
-
-        mage.updateBlink(playerX, playerY, 0)
+    fun `test abyssal weaver blinks and fires orb when in range and cooldown is zero`() {
+        // Arrange
+        val weaver = ZombieEntity(
+            id = 1,
+            archetype = ZombieArchetype.ABYSSAL_WEAVER,
+            x = 200f,
+            y = 200f,
+            hp = 100,
+            maxHp = 100,
+            attackCooldownMs = 100L
+        )
         
-        // Mage should blink away. Direction from player to mage is (-50, 0) -> normalized (-1, 0)
-        // Expected new pos = 100 + (-1 * 300) = -200
-        assertEquals(-200f, mage.x, 0.1f)
-        assertEquals(100f, mage.y, 0.1f)
+        val playerX = 200f
+        val playerY = 400f // Distance is 200f (in range 140..460)
+        val enemyProjectiles = mutableListOf<EnemyProjectile>()
+        val particles = mutableListOf<ParticleBurst>()
+        var nextId = 100
+        
+        val originalX = weaver.x
+        val originalY = weaver.y
+
+        // Act
+        AbyssalWeaverBlinkMage.processBlinkAndShoot(
+            weaver = weaver,
+            playerX = playerX,
+            playerY = playerY,
+            deltaMs = 150L, // Cooldown becomes 0
+            enemyProjectiles = enemyProjectiles,
+            particles = particles,
+            nextEntityIdProvider = { nextId++ }
+        )
+
+        // Assert
+        // Cooldown reset
+        assertEquals(2900L, weaver.attackCooldownMs)
+        
+        // Blinked (position changed)
+        val blinkDist = hypot(weaver.x - originalX, weaver.y - originalY)
+        assertTrue("Blink distance $blinkDist should be between 40 and 70", blinkDist >= 39f && blinkDist <= 71f)
+        
+        // Particles spawned (origin and destination)
+        assertEquals(16, particles.size)
+        assertEquals(0xFFB388FF, particles[0].colorHex)
+        
+        // Orb fired
+        assertEquals(1, enemyProjectiles.size)
+        val orb = enemyProjectiles[0]
+        assertEquals(100, orb.id)
+        assertTrue(orb.spawnsPuddleOnImpact)
+        assertTrue(orb.elementKind == ElementalAffinity.CRYO || orb.elementKind == ElementalAffinity.CORROSIVE)
+        assertEquals(14, orb.damage)
+        assertEquals(2600L, orb.ttlMs)
     }
 
     @Test
-    fun testBlinkStateChangesTowardsPlayer() {
-        val mage = AbyssalWeaverBlinkMage(x = -400f, y = 100f)
-        val playerX = 100f
-        val playerY = 100f // Distance 500 > 400
+    fun `test abyssal weaver does not attack if out of range`() {
+        val weaver = ZombieEntity(
+            id = 1,
+            archetype = ZombieArchetype.ABYSSAL_WEAVER,
+            x = 200f,
+            y = 200f,
+            hp = 100,
+            maxHp = 100,
+            attackCooldownMs = 0L
+        )
+        
+        val enemyProjectiles = mutableListOf<EnemyProjectile>()
+        val particles = mutableListOf<ParticleBurst>()
+        var nextId = 100
 
-        mage.updateBlink(playerX, playerY, 0)
-
-        // Mage should blink towards. Direction from mage to player is (500, 0) -> normalized (1, 0)
-        // Expected new pos = -400 + (1 * 300) = -100
-        assertEquals(-100f, mage.x, 0.1f)
-        assertEquals(100f, mage.y, 0.1f)
-    }
-
-    @Test
-    fun testBlinkCooldownConstraints() {
-        val mage = AbyssalWeaverBlinkMage(x = 0f, y = 0f)
+        // Out of range (too close)
+        AbyssalWeaverBlinkMage.processBlinkAndShoot(
+            weaver = weaver,
+            playerX = 200f,
+            playerY = 250f, // dist = 50 (< 140)
+            deltaMs = 0L,
+            enemyProjectiles = enemyProjectiles,
+            particles = particles,
+            nextEntityIdProvider = { nextId++ }
+        )
         
-        // Initial blink
-        mage.updateBlink(100f, 0f, 0L)
-        val xAfterFirstBlink = mage.x
-        
-        // Attempt to blink before cooldown expires
-        mage.updateBlink(100f, 0f, 1000L)
-        assertEquals(xAfterFirstBlink, mage.x, 0.1f)
-        
-        // Cooldown expires
-        mage.updateBlink(100f, 0f, 4000L) // Total 5000L
-        assertTrue(mage.x != xAfterFirstBlink)
-    }
-
-    @Test
-    fun testFireSlowOrbProperties() {
-        val mage = AbyssalWeaverBlinkMage(x = 0f, y = 0f)
-        
-        val orb = mage.fireSlowOrb(100f, 0f)
-        assertNotNull(orb)
-        assertEquals(0f, orb!!.x, 0.1f)
-        assertEquals(0f, orb.y, 0.1f)
-        assertEquals(150f, orb.vx, 0.1f)
-        assertEquals(0f, orb.vy, 0.1f)
-        assertEquals(24f, orb.radiusPx, 0.1f)
-        assertEquals(0.5f, orb.slowFactor, 0.1f)
-        assertEquals(3000L, orb.durationMs)
-        
-        // Cooldown constraint
-        val orb2 = mage.fireSlowOrb(100f, 0f)
-        assertNull(orb2)
-        
-        mage.updateBlink(100f, 0f, 3000L) // Wait for orb cooldown
-        val orb3 = mage.fireSlowOrb(100f, 0f)
-        assertNotNull(orb3)
+        assertEquals(0L, weaver.attackCooldownMs)
+        assertEquals(0, enemyProjectiles.size)
+        assertEquals(0, particles.size)
     }
 }

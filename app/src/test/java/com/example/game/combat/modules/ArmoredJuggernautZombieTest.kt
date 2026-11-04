@@ -1,76 +1,89 @@
 package com.example.game.combat.modules
 
 import com.example.game.ElementalAffinity
+import com.example.game.ZombieArchetype
+import com.example.game.ZombieEntity
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ArmoredJuggernautZombieTest {
 
-    @Test
-    fun testCorrosiveDamageIsHighlyEffective() {
-        val state = ArmoredJuggernautState(baseZombieId = 1, armorHp = 100, maxArmorHp = 100)
-        
-        // Corrosive applies 2x multiplier
-        val (newState, passThrough) = ArmoredJuggernautCombatLogic.applyDamage(
-            state = state,
-            rawDamage = 30, // 30 * 2.0 = 60
-            element = ElementalAffinity.CORROSIVE,
-            isBarrelExplosion = false
+    private fun createJuggernaut(hp: Int = 100, armorHp: Int = 50): ArmoredJuggernautZombie {
+        val entity = ZombieEntity(
+            id = 1,
+            archetype = ZombieArchetype.SHAMBLER, // Using shambler for simplicity
+            x = 0f,
+            y = 0f,
+            hp = hp,
+            maxHp = hp
         )
-        
-        assertEquals(40, newState.armorHp)
-        assertEquals(0, passThrough)
-        assertFalse(newState.isArmorStripped)
+        return ArmoredJuggernautZombie(entity, armorHp, armorHp)
     }
 
     @Test
-    fun testKineticDamageIsIneffective() {
-        val state = ArmoredJuggernautState(baseZombieId = 1, armorHp = 100, maxArmorHp = 100)
+    fun testKineticDamageHighlyMitigatedByArmor() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 50)
         
-        // Kinetic applies 0.25x multiplier
-        val (newState, passThrough) = ArmoredJuggernautCombatLogic.applyDamage(
-            state = state,
-            rawDamage = 40, // 40 * 0.25 = 10
-            element = ElementalAffinity.KINETIC,
-            isBarrelExplosion = false
-        )
+        // 100 base damage -> 10% damage to armor -> 10 damage to armor
+        juggernaut.takeDamage(100, ElementalAffinity.KINETIC, isExplosiveBarrel = false)
         
-        assertEquals(90, newState.armorHp)
-        assertEquals(0, passThrough)
-        assertFalse(newState.isArmorStripped)
+        assertEquals("Armor should absorb most kinetic damage", 40, juggernaut.armorHp)
+        assertEquals("Entity HP should be untouched while armor holds", 100, juggernaut.entity.hp)
     }
 
     @Test
-    fun testBarrelExplosionInstantlyStripsArmor() {
-        val state = ArmoredJuggernautState(baseZombieId = 1, armorHp = 500, maxArmorHp = 500)
+    fun testCorrosiveDamageStripsArmorEfficiently() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 50)
         
-        val (newState, passThrough) = ArmoredJuggernautCombatLogic.applyDamage(
-            state = state,
-            rawDamage = 260,
-            element = ElementalAffinity.KINETIC,
-            isBarrelExplosion = true
-        )
+        // 40 base damage -> 100% damage to armor -> 40 damage to armor
+        juggernaut.takeDamage(40, ElementalAffinity.CORROSIVE, isExplosiveBarrel = false)
         
-        assertEquals(0, newState.armorHp)
-        assertEquals(0, passThrough) // Absorbs the hit that breaks it
-        assertTrue(newState.isArmorStripped)
+        assertEquals("Corrosive should deal full damage to armor", 10, juggernaut.armorHp)
+        assertEquals("Entity HP should be untouched while armor holds", 100, juggernaut.entity.hp)
     }
 
     @Test
-    fun testPassThroughDamageWhenArmorAlreadyStripped() {
-        val state = ArmoredJuggernautState(baseZombieId = 1, armorHp = 0, maxArmorHp = 100)
+    fun testExplosiveBarrelStripsArmorEfficiently() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 50)
         
-        val (newState, passThrough) = ArmoredJuggernautCombatLogic.applyDamage(
-            state = state,
-            rawDamage = 40,
-            element = ElementalAffinity.KINETIC,
-            isBarrelExplosion = false
-        )
+        // 40 base damage from explosive barrel -> 100% damage to armor
+        juggernaut.takeDamage(40, ElementalAffinity.KINETIC, isExplosiveBarrel = true)
         
-        assertEquals(0, newState.armorHp)
-        assertEquals(40, passThrough) // Direct damage to core HP
-        assertTrue(newState.isArmorStripped)
+        assertEquals("Explosive barrel should deal full damage to armor", 10, juggernaut.armorHp)
+        assertEquals("Entity HP should be untouched while armor holds", 100, juggernaut.entity.hp)
+    }
+
+    @Test
+    fun testArmorBreakOverflowDamageCorrosive() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 50)
+        
+        // 70 base damage Corrosive -> breaks 50 armor, leaves 20 damage overflowing
+        juggernaut.takeDamage(70, ElementalAffinity.CORROSIVE, isExplosiveBarrel = false)
+        
+        assertEquals("Armor should be broken", 0, juggernaut.armorHp)
+        assertEquals("Remaining damage should overflow to entity HP", 80, juggernaut.entity.hp)
+    }
+    
+    @Test
+    fun testArmorBreakOverflowDamageKinetic() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 50)
+        
+        // 600 base damage Kinetic -> needs 500 damage to break 50 armor (since it does 10%)
+        // Remaining base damage is 100, which overflows as normal damage
+        juggernaut.takeDamage(600, ElementalAffinity.KINETIC, isExplosiveBarrel = false)
+        
+        assertEquals("Armor should be broken", 0, juggernaut.armorHp)
+        assertEquals("Remaining damage should overflow to entity HP", 0, juggernaut.entity.hp)
+    }
+
+    @Test
+    fun testDamageWithoutArmor() {
+        val juggernaut = createJuggernaut(hp = 100, armorHp = 0)
+        
+        // 30 base damage when armor is already 0
+        juggernaut.takeDamage(30, ElementalAffinity.KINETIC, isExplosiveBarrel = false)
+        
+        assertEquals("Armor should remain 0", 0, juggernaut.armorHp)
+        assertEquals("Damage should go directly to entity HP", 70, juggernaut.entity.hp)
     }
 }

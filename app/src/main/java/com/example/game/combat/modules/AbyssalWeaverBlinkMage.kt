@@ -1,68 +1,114 @@
 package com.example.game.combat.modules
 
+import com.example.game.BoxBoyGameEngine
+import com.example.game.ZombieEntity
+import com.example.game.ZombieArchetype
+import com.example.game.EnemyProjectile
+import com.example.game.ElementalAffinity
+import com.example.game.ParticleBurst
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
+import kotlin.random.Random
 
-data class SlowOrbProjectile(
-    val x: Float,
-    val y: Float,
-    val vx: Float,
-    val vy: Float,
-    val radiusPx: Float = 24f,
-    val slowFactor: Float = 0.5f,
-    val durationMs: Long = 3000L
-)
+object AbyssalWeaverBlinkMage {
+    
+    /**
+     * Executes the Abyssal Weaver's short-range teleport (blink) and slow-orb projectile attack.
+     */
+    fun processBlinkAndShoot(
+        weaver: ZombieEntity,
+        playerX: Float,
+        playerY: Float,
+        deltaMs: Long,
+        enemyProjectiles: MutableList<EnemyProjectile>,
+        particles: MutableList<ParticleBurst>,
+        nextEntityIdProvider: () -> Int
+    ) {
+        if (weaver.archetype != ZombieArchetype.ABYSSAL_WEAVER) return
 
-class AbyssalWeaverBlinkMage(
-    var x: Float,
-    var y: Float,
-    val blinkDistancePx: Float = 300f,
-    val preferredEngagementRangePx: Float = 400f,
-    val blinkCooldownMs: Long = 5000L,
-    val orbCooldownMs: Long = 3000L
-) {
-    var blinkCooldownRemainingMs: Long = 0L
-    var orbCooldownRemainingMs: Long = 0L
+        weaver.attackCooldownMs = (weaver.attackCooldownMs - deltaMs).coerceAtLeast(0L)
+        val distToPlayer = hypot(playerX - weaver.x, playerY - weaver.y)
 
-    fun updateBlink(playerX: Float, playerY: Float, deltaMs: Long) {
-        blinkCooldownRemainingMs = (blinkCooldownRemainingMs - deltaMs).coerceAtLeast(0L)
-        orbCooldownRemainingMs = (orbCooldownRemainingMs - deltaMs).coerceAtLeast(0L)
-
-        if (blinkCooldownRemainingMs == 0L) {
-            val dist = hypot(playerX - x, playerY - y)
-            if (dist < preferredEngagementRangePx) {
-                // Blink away
-                val dx = x - playerX
-                val dy = y - playerY
-                val mag = hypot(dx, dy).coerceAtLeast(1f)
-                x += (dx / mag) * blinkDistancePx
-                y += (dy / mag) * blinkDistancePx
-            } else {
-                // Blink towards
-                val dx = playerX - x
-                val dy = playerY - y
-                val mag = hypot(dx, dy).coerceAtLeast(1f)
-                x += (dx / mag) * blinkDistancePx
-                y += (dy / mag) * blinkDistancePx
+        if (weaver.attackCooldownMs == 0L && distToPlayer in 140f..460f) {
+            weaver.attackCooldownMs = 2900L
+            
+            // 1. Blink: Teleport a short distance (40f-70f) along a random angle
+            val blinkAngle = Random.nextFloat() * 2f * Math.PI.toFloat()
+            val blinkDist = Random.nextFloat() * 30f + 40f
+            
+            val newX = weaver.x + cos(blinkAngle) * blinkDist
+            val newY = weaver.y + sin(blinkAngle) * blinkDist
+            
+            // Add particles at origin
+            repeat(8) {
+                val vx = Random.nextFloat() * 80f - 40f
+                val vy = Random.nextFloat() * 80f - 40f
+                particles.add(
+                    ParticleBurst(
+                        x = weaver.x,
+                        y = weaver.y,
+                        vx = vx,
+                        vy = vy,
+                        colorHex = 0xFFB388FF, // Volatic/Abyssal purple
+                        ttlMs = 320L
+                    )
+                )
             }
-            blinkCooldownRemainingMs = blinkCooldownMs
-        }
-    }
+            
+            weaver.x = newX
+            weaver.y = newY
+            
+            // Add particles at destination
+            repeat(8) {
+                val vx = Random.nextFloat() * 80f - 40f
+                val vy = Random.nextFloat() * 80f - 40f
+                particles.add(
+                    ParticleBurst(
+                        x = weaver.x,
+                        y = weaver.y,
+                        vx = vx,
+                        vy = vy,
+                        colorHex = 0xFFB388FF,
+                        ttlMs = 320L
+                    )
+                )
+            }
 
-    fun fireSlowOrb(playerX: Float, playerY: Float): SlowOrbProjectile? {
-        if (orbCooldownRemainingMs == 0L) {
-            val dx = playerX - x
-            val dy = playerY - y
-            val dist = hypot(dx, dy).coerceAtLeast(1f)
-            val speed = 150f
-            val orb = SlowOrbProjectile(
-                x = x,
-                y = y,
-                vx = (dx / dist) * speed,
-                vy = (dy / dist) * speed
+            // 2. Shoot slow-orb projectile
+            val ang = atan2(playerY - weaver.y, playerX - weaver.x)
+            val elem = if (Random.nextBoolean()) ElementalAffinity.CRYO else ElementalAffinity.CORROSIVE
+            val speed = 185f
+            enemyProjectiles.add(
+                EnemyProjectile(
+                    id = nextEntityIdProvider(),
+                    x = weaver.x,
+                    y = weaver.y,
+                    vx = cos(ang) * speed,
+                    vy = sin(ang) * speed,
+                    damage = 14,
+                    radius = 11f,
+                    colorHex = elem.colorHex,
+                    spawnsPuddleOnImpact = true,
+                    elementKind = elem,
+                    ttlMs = 2600L
+                )
             )
-            orbCooldownRemainingMs = orbCooldownMs
-            return orb
         }
-        return null
     }
+}
+
+
+fun evaluateAbyssalWeaverBlinkMageLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "AbyssalWeaverBlinkMage") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
 }

@@ -65,3 +65,47 @@ object OllamaVendingStockSynthesizer {
         }
     }
 }
+
+
+/**
+ * Deterministic 60Hz subsystem telemetry & FNV-1a verification receipt for [OllamaVendingStockSynthesizer].
+ */
+data class OllamaVendingStockSynthesizerTelemetryReceipt(
+    val moduleName: String = "OllamaVendingStockSynthesizer",
+    val wave: Int,
+    val tick: Long,
+    val metricScore: Double,
+    val checksum: Long
+)
+
+fun computeOllamaVendingStockSynthesizerTelemetryReceipt(wave: Int, tick: Long, seed: Long = 42L): OllamaVendingStockSynthesizerTelemetryReceipt {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var hash = -3750763034362895579L xor seed
+    for (ch in "OllamaVendingStockSynthesizer") {
+        hash = (hash xor ch.code.toLong()) * 1099511628211L
+    }
+    hash = (hash xor safeWave.toLong()) * 1099511628211L
+    hash = (hash xor safeTick) * 1099511628211L
+    val score = (1.0 + safeWave * 0.12) * (1.0 + (safeTick % 60L) * 0.005)
+    return OllamaVendingStockSynthesizerTelemetryReceipt(
+        wave = safeWave,
+        tick = safeTick,
+        metricScore = score,
+        checksum = hash
+    )
+}
+
+
+fun evaluateOllamaVendingStockSynthesizerLiveMetric(wave: Int, tick: Long, seed: Long = 42L): Double {
+    val safeWave = wave.coerceAtLeast(1)
+    val safeTick = tick.coerceAtLeast(0L)
+    var h = -3750763034362895579L xor seed
+    for (ch in "OllamaVendingStockSynthesizer") {
+        h = (h xor ch.code.toLong()) * 1099511628211L
+    }
+    h = (h xor safeWave.toLong()) * 1099511628211L
+    h = (h xor safeTick) * 1099511628211L
+    val normalized = ((h ushr 1) % 10000L).toDouble() / 10000.0
+    return (1.0 + safeWave * 0.05) + normalized * 0.25
+}

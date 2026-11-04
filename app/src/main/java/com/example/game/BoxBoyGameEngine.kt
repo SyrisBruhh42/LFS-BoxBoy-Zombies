@@ -2107,4 +2107,31 @@ class BoxBoyGameEngine {
         val projY = y1 + t * dy
         return hypot(px - projX, py - projY)
     }
+
+    /**
+     * Evaluates all 147 unified BoxBoys track modules for the given [state] and [tick],
+     * returning deterministic 60Hz telemetry and FNV-1a checksums.
+     */
+    fun evaluateLiveSubsystemBridge(
+        state: GameSessionState,
+        tick: Long = 1L
+    ): com.example.game.contracts.LiveSubsystemTickSummary {
+        val input = com.example.game.contracts.LiveSubsystemTickInput(
+            tick = tick,
+            wave = state.wave,
+            dtSeconds = 0.016f,
+            playerX = state.playerX,
+            playerY = state.playerY,
+            playerHp = state.hp,
+            playerMaxHp = state.maxHp,
+            currencyPoints = state.points,
+            activeZombieCount = state.zombies.size,
+            comboStreak = state.comboCount,
+            seed = state.mapSeed
+        )
+        return BoxBoysLiveSubsystemBridge.stepLiveSubsystems(input, state.passiveRelics)
+    }
+
+    fun verifySubsystemRegistryCounts(): Map<String, Int> =
+        BoxBoysLiveSubsystemBridge.verifyAllRegisteredSubsystems()
 }

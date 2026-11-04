@@ -1,61 +1,118 @@
 package com.example.game.combat.modules
 
+import com.example.game.FortificationEntity
+import com.example.game.FortificationType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoltaicScreamerZombieTest {
 
     @Test
-    fun testEmpDischargeSlowsTurrets() {
-        val screamer = ScreamerZombie("s1", 0f, 0f, isCharging = true)
-        val turret1 = Turret("t1", 100f, 0f, baseFireRateDelayMs = 1000L, currentFireRateDelayMs = 1000L)
-        val turret2 = Turret("t2", 500f, 0f, baseFireRateDelayMs = 1000L, currentFireRateDelayMs = 1000L) // Out of range
+    fun testScreamerActivatesScreechWhenCooldownZero() {
+        val screamer = VoltaicScreamerZombie(
+            id = 1,
+            x = 0f,
+            y = 0f,
+            hp = 100,
+            maxHp = 100,
+            isScreaming = false,
+            screechDurationMs = 0L,
+            screechCooldownMs = 100L
+        )
 
-        val turrets = listOf(turret1, turret2)
+        val (updatedScreamers, _) = VoltaicScreamerEngine.stepScreamers(
+            listOf(screamer),
+            emptyList(),
+            100L
+        )
 
-        VoltaicScreamerZombieLogic.updateScreamer(screamer, VoltaicScreamerZombieLogic.EMP_CHARGE_REQUIRED_MS, turrets)
-
-        // Screamer should finish charging
-        assertEquals(false, screamer.isCharging)
-        assertEquals(0L, screamer.empChargeTimeMs)
-
-        // Turret 1 should be debuffed (within 300f)
-        assertEquals(VoltaicScreamerZombieLogic.EMP_DEBUFF_DURATION_MS, turret1.empDebuffRemainingMs)
-        assertEquals(2000L, turret1.currentFireRateDelayMs)
-
-        // Turret 2 should NOT be debuffed (outside 300f)
-        assertEquals(0L, turret2.empDebuffRemainingMs)
-        assertEquals(1000L, turret2.currentFireRateDelayMs)
+        assertEquals(1, updatedScreamers.size)
+        assertTrue(updatedScreamers[0].isScreaming)
+        assertEquals(VoltaicScreamerEngine.MAX_SCREECH_DURATION_MS, updatedScreamers[0].screechDurationMs)
     }
 
     @Test
-    fun testEmpInterruption() {
-        val screamer = ScreamerZombie("s1", 0f, 0f, isCharging = true, isInterrupted = true)
-        val turret = Turret("t1", 100f, 0f, baseFireRateDelayMs = 1000L, currentFireRateDelayMs = 1000L)
-        
-        VoltaicScreamerZombieLogic.updateScreamer(screamer, VoltaicScreamerZombieLogic.EMP_CHARGE_REQUIRED_MS, listOf(turret))
+    fun testScreamerSlowsTurretFireRateWithinRadius() {
+        val screamer = VoltaicScreamerZombie(
+            id = 1,
+            x = 100f,
+            y = 100f,
+            hp = 100,
+            maxHp = 100,
+            isScreaming = true,
+            screechDurationMs = 1000L,
+            screechCooldownMs = 0L
+        )
 
-        // Interrupted before or during charge
-        assertEquals(false, screamer.isCharging)
-        assertEquals(0L, screamer.empChargeTimeMs)
+        val turret = FortificationEntity(
+            id = 1,
+            kind = FortificationType.AUTO_TURRET_BEACON,
+            x = 150f, // Within 300f radius
+            y = 150f,
+            roomIndex = 0,
+            fireCooldownMs = 500L
+        )
 
-        // Turret shouldn't be debuffed
-        assertEquals(0L, turret.empDebuffRemainingMs)
-        assertEquals(1000L, turret.currentFireRateDelayMs)
+        val outOfRangeTurret = FortificationEntity(
+            id = 2,
+            kind = FortificationType.AUTO_TURRET_BEACON,
+            x = 1000f, // Outside 300f radius
+            y = 1000f,
+            roomIndex = 0,
+            fireCooldownMs = 500L
+        )
+
+        val (_, updatedTurrets) = VoltaicScreamerEngine.stepScreamers(
+            listOf(screamer),
+            listOf(turret, outOfRangeTurret),
+            100L
+        )
+
+        assertEquals(2, updatedTurrets.size)
+        val updatedTurret = updatedTurrets.find { it.id == 1 }!!
+        val updatedOutOfRangeTurret = updatedTurrets.find { it.id == 2 }!!
+
+        // In range turret should have increased fireCooldownMs
+        assertTrue(updatedTurret.fireCooldownMs > 500L)
+        // Out of range turret should not be affected
+        assertEquals(500L, updatedOutOfRangeTurret.fireCooldownMs)
     }
 
     @Test
-    fun testTurretRecoveryOverTime() {
-        val turret = Turret("t1", 0f, 0f, baseFireRateDelayMs = 1000L, currentFireRateDelayMs = 2000L, empDebuffRemainingMs = VoltaicScreamerZombieLogic.EMP_DEBUFF_DURATION_MS)
+    fun testInterruptedScreamerStopsScreechEffect() {
+        // "unless interrupted" - in this simple implementation, interruption is just death (hp = 0)
+        // or we could test that a dead screamer doesn't screech.
+        val screamer = VoltaicScreamerZombie(
+            id = 1,
+            x = 100f,
+            y = 100f,
+            hp = 0, // Dead
+            maxHp = 100,
+            isScreaming = true,
+            screechDurationMs = 1000L,
+            screechCooldownMs = 0L
+        )
 
-        // Partial recovery
-        VoltaicScreamerZombieLogic.updateTurret(turret, 2000L)
-        assertEquals(VoltaicScreamerZombieLogic.EMP_DEBUFF_DURATION_MS - 2000L, turret.empDebuffRemainingMs)
-        assertEquals(2000L, turret.currentFireRateDelayMs)
+        val turret = FortificationEntity(
+            id = 1,
+            kind = FortificationType.AUTO_TURRET_BEACON,
+            x = 150f,
+            y = 150f,
+            roomIndex = 0,
+            fireCooldownMs = 500L
+        )
 
-        // Full recovery
-        VoltaicScreamerZombieLogic.updateTurret(turret, 3000L)
-        assertEquals(0L, turret.empDebuffRemainingMs)
-        assertEquals(1000L, turret.currentFireRateDelayMs) // Back to normal
+        val (updatedScreamers, updatedTurrets) = VoltaicScreamerEngine.stepScreamers(
+            listOf(screamer),
+            listOf(turret),
+            100L
+        )
+
+        assertEquals(0, updatedScreamers.size) // HP <= 0 are removed
+        assertEquals(1, updatedTurrets.size)
+        // Turret unaffected
+        assertEquals(500L, updatedTurrets[0].fireCooldownMs)
     }
 }

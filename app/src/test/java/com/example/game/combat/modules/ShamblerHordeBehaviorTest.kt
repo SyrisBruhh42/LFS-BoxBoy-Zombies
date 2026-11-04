@@ -1,73 +1,104 @@
 package com.example.game.combat.modules
 
-import org.junit.Assert.*
+import com.example.game.InteractiveStation
+import com.example.game.StationKind
+import com.example.game.ZombieArchetype
+import com.example.game.ZombieEntity
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.hypot
 
 class ShamblerHordeBehaviorTest {
 
     @Test
-    fun testWindowClawingBehavior() {
-        val window = WindowBarricade(id = 1, x = 100f, y = 100f, planksRemaining = 3)
-        // Zombie within 8f of radius sum (14 + 24 = 38, so within 46f)
-        val zombie = ShamblerZombie(id = 10, x = 100f, y = 140f) // distance 40f
-        
-        val result = ShamblerHordeBehavior.computeShamblerSteering(
-            zombieIndex = 0,
-            shamblers = listOf(zombie),
-            windows = listOf(window),
-            targetX = 0f,
-            targetY = 0f,
-            deltaMs = 16L
+    fun testShamblerClawsWindowWhenNear() {
+        val zombie = ZombieEntity(1, ZombieArchetype.SHAMBLER, 100f, 100f, 100, 100)
+        val window = InteractiveStation(
+            id = "w1",
+            kind = StationKind.BARRICADE_WINDOW,
+            label = "Window",
+            x = 110f, // Distance 10 (less than 40)
+            y = 100f,
+            cost = 0,
+            roomIndex = 0,
+            barricadePlanks = 5
         )
-        
-        assertEquals(1, result.clawingWindowId)
-        assertEquals(0f, result.sepX, 0.001f)
-        assertEquals(0f, result.cohX, 0.001f)
+
+        val result = ShamblerHordeBehavior.computeShamblerBehavior(
+            zombie,
+            listOf(zombie),
+            200f,
+            200f,
+            listOf(window)
+        )
+
+        assertTrue(result.isClawingWindow)
+        assertEquals(0f, result.dx, 0.01f)
+        assertEquals(0f, result.dy, 0.01f)
     }
 
     @Test
-    fun testSeparationBehavior() {
-        // Two zombies very close to each other
-        val z1 = ShamblerZombie(id = 1, x = 0f, y = 0f)
-        val z2 = ShamblerZombie(id = 2, x = 10f, y = 0f)
-        
-        val result = ShamblerHordeBehavior.computeShamblerSteering(
-            zombieIndex = 0,
-            shamblers = listOf(z1, z2),
-            windows = emptyList(),
-            targetX = 100f,
-            targetY = 0f,
-            deltaMs = 16L
+    fun testShamblerIgnoresWindowWithoutPlanks() {
+        val zombie = ZombieEntity(1, ZombieArchetype.SHAMBLER, 100f, 100f, 100, 100)
+        val window = InteractiveStation(
+            id = "w1",
+            kind = StationKind.BARRICADE_WINDOW,
+            label = "Window",
+            x = 110f,
+            y = 100f,
+            cost = 0,
+            roomIndex = 0,
+            barricadePlanks = 0
         )
-        
-        assertNull(result.clawingWindowId)
-        // z1 should be pushed away from z2, so separation vector should be negative in x
-        assertTrue(result.sepX < 0)
-        assertEquals(0f, result.sepY, 0.001f)
+
+        val result = ShamblerHordeBehavior.computeShamblerBehavior(
+            zombie,
+            listOf(zombie),
+            200f,
+            100f,
+            listOf(window)
+        )
+
+        assertFalse(result.isClawingWindow)
+        assertTrue(result.dx > 0) // Moving towards target (200, 100)
     }
 
     @Test
-    fun testCohesionBehavior() {
-        // z1 and z2 are far enough not to separate but close enough to flock
-        val z1 = ShamblerZombie(id = 1, x = 0f, y = 0f)
-        val z2 = ShamblerZombie(id = 2, x = 50f, y = 0f)
+    fun testShamblerMovesTowardsTarget() {
+        val zombie = ZombieEntity(1, ZombieArchetype.SHAMBLER, 0f, 0f, 100, 100)
         
-        val result = ShamblerHordeBehavior.computeShamblerSteering(
-            zombieIndex = 0,
-            shamblers = listOf(z1, z2),
-            windows = emptyList(),
-            targetX = 100f,
-            targetY = 0f,
-            deltaMs = 16L
+        val result = ShamblerHordeBehavior.computeShamblerBehavior(
+            zombie,
+            listOf(zombie),
+            100f,
+            0f,
+            emptyList()
         )
+
+        assertFalse(result.isClawingWindow)
+        assertEquals(1f, result.dx, 0.01f)
+        assertEquals(0f, result.dy, 0.01f)
+    }
+    
+    @Test
+    fun testShamblerSeparation() {
+        val zombie = ZombieEntity(1, ZombieArchetype.SHAMBLER, 0f, 0f, 100, 100)
+        val otherZombie = ZombieEntity(2, ZombieArchetype.SHAMBLER, 10f, 0f, 100, 100) // Near on X axis
         
-        assertNull(result.clawingWindowId)
-        // z1 should want to move towards the center of the flock (which is z2's position)
-        // so cohesion vector should be positive in x
-        assertTrue(result.cohX > 0)
-        assertEquals(0f, result.cohY, 0.001f)
-        // Should not separate
-        assertEquals(0f, result.sepX, 0.001f)
-        assertEquals(0f, result.sepY, 0.001f)
+        val result = ShamblerHordeBehavior.computeShamblerBehavior(
+            zombie,
+            listOf(zombie, otherZombie),
+            100f, // Target is in +X direction
+            0f,
+            emptyList()
+        )
+
+        assertFalse(result.isClawingWindow)
+        // Since other zombie is at +10x, separation will push in -X direction
+        // The combined vector should have a smaller X component than pure target seeking
+        // or even be negative depending on weights.
+        assertTrue(result.dx < 1f) 
     }
 }

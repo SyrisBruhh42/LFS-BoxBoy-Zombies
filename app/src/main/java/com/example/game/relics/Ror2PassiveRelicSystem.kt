@@ -98,6 +98,14 @@ enum class PassiveRelicKind(
         "+5% critical strike chance; critical hits heal 8 HP",
         "+4 HP healed on crit per stack",
         0xFF00FF66
+    ),
+    CEREMONIAL_DAGGERS(
+        "ceremonial_daggers",
+        "Ceremonial Daggers",
+        LootRarity.ABYSSAL_LEGENDARY,
+        "Kills spawn 3 homing soul daggers",
+        "+150% damage per stack",
+        0xFF8E24AA
     );
 
     val canBePurchasedAtVending: Boolean
@@ -132,7 +140,36 @@ data class PassiveRelicStackState(
             val c = countOf(PassiveRelicKind.UKULELE_ARC_LIGHTNING)
             return if (c <= 0) 0 else 3 + (c - 1) * 2
         }
+
+    val homingDaggerCount: Int
+        get() {
+            val c = countOf(PassiveRelicKind.CEREMONIAL_DAGGERS)
+            return if (c <= 0) 0 else 3
+        }
+
+    val ceremonialDaggerDamageMultiplier: Float
+        get() {
+            val c = countOf(PassiveRelicKind.CEREMONIAL_DAGGERS)
+            return if (c <= 0) 0f else 1.50f * c
+        }
 }
+
+data class PassiveRelicCombatSnapshot(
+    val totalRelicCount: Int,
+    val moveSpeedMultiplier: Float,
+    val attackCadenceMultiplier: Float,
+    val openingStrikeMultiplier: Float,
+    val critHealAmount: Int,
+    val arcLightningTargets: Int,
+    val plasmaMissileDamageMultiplier: Float,
+    val willOWispBlastDamageMultiplier: Float,
+    val frostStormRadiusPx: Float,
+    val blastSurfImpulseMultiplier: Float,
+    val teslaCoilArcCount: Int,
+    val homingDaggerCount: Int,
+    val ceremonialDaggerDamageMultiplier: Float,
+    val checksum: Long
+)
 
 object Ror2PassiveRelicSystem {
     const val PURCHASABLE_IN_SHOPS: Boolean = false
@@ -146,6 +183,40 @@ object Ror2PassiveRelicSystem {
         val updated = current.stacks.toMutableMap()
         updated[relic] = (updated[relic] ?: 0) + amount
         return PassiveRelicStackState(updated)
+    }
+
+    fun computePassiveRelicSnapshot(
+        state: PassiveRelicStackState,
+        wave: Int = 1,
+        seed: Long = 42L
+    ): PassiveRelicCombatSnapshot {
+        val atgCount = state.countOf(PassiveRelicKind.ATG_PLASMA_MISSILE)
+        val wispCount = state.countOf(PassiveRelicKind.WILL_O_WISP_JAR)
+        val frostCount = state.countOf(PassiveRelicKind.FROST_RELIC_ICICLE)
+        val surfCount = state.countOf(PassiveRelicKind.BLAST_SURF_THRUSTERS)
+        val teslaCount = state.countOf(PassiveRelicKind.TESLA_COIL_BEACON)
+
+        var hash = -3750763034362895579L xor seed xor wave.toLong()
+        for (kind in PassiveRelicKind.entries) {
+            hash = (hash xor kind.ordinal.toLong() xor state.countOf(kind).toLong()) * 1099511628211L
+        }
+
+        return PassiveRelicCombatSnapshot(
+            totalRelicCount = state.totalRelicCount,
+            moveSpeedMultiplier = state.moveSpeedMultiplier,
+            attackCadenceMultiplier = state.attackCadenceMultiplier,
+            openingStrikeMultiplier = state.openingStrikeMultiplier,
+            critHealAmount = state.critHealAmount,
+            arcLightningTargets = state.arcLightningTargets,
+            plasmaMissileDamageMultiplier = if (atgCount <= 0) 0f else 3.0f * atgCount,
+            willOWispBlastDamageMultiplier = if (wispCount <= 0) 0f else 3.5f + (wispCount - 1) * 2.8f,
+            frostStormRadiusPx = if (frostCount <= 0) 0f else 96f + (frostCount - 1) * 36f,
+            blastSurfImpulseMultiplier = 1.0f + surfCount * 0.20f,
+            teslaCoilArcCount = if (teslaCount <= 0) 0 else 2 * teslaCount,
+            homingDaggerCount = state.homingDaggerCount,
+            ceremonialDaggerDamageMultiplier = state.ceremonialDaggerDamageMultiplier,
+            checksum = hash
+        )
     }
 
     fun rollRareRelicDrop(
@@ -162,6 +233,13 @@ object Ror2PassiveRelicSystem {
         val pool = PassiveRelicKind.entries
         return pool[abs(rng.nextInt()) % pool.size]
     }
+
+    fun rollMonsterDropRelic(
+        wave: Int,
+        isBossKill: Boolean = false,
+        isComboMilestone: Boolean = false,
+        seed: Long = 1337L
+    ): PassiveRelicKind? = rollRareRelicDrop(wave, isBossKill, isComboMilestone, seed)
 
     /**
      * Grants `floor(wave / 5)` random RoR2 Passive Relics for a player hot-joining mid-session!
