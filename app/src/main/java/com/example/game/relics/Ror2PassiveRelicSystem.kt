@@ -98,6 +98,14 @@ enum class PassiveRelicKind(
         "+5% critical strike chance; critical hits heal 8 HP",
         "+4 HP healed on crit per stack",
         0xFF00FF66
+    ),
+    CEREMONIAL_DAGGERS(
+        "ceremonial_daggers",
+        "Ceremonial Daggers",
+        LootRarity.ABYSSAL_LEGENDARY,
+        "Kills spawn 3 homing soul daggers",
+        "+150% damage per stack",
+        0xFF8E24AA
     );
 
     val canBePurchasedAtVending: Boolean
