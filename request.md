@@ -1,0 +1,1 @@
+The user requested to implement `app/src/main/java/com/example/game/combat/modules/CalcifiedStalkerLaser.kt` and unit test `app/src/test/java/com/example/game/combat/modules/CalcifiedStalkerLaserTest.kt` for Unified BoxBoys Track 3 (Boxhead 2Play Combat & Physics): Ranged Calcified Stalker telegraph laser sightline and dodge window.
