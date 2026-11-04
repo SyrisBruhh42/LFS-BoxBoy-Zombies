@@ -14,8 +14,26 @@
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+-keepattributes SourceFile,LineNumberTable
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,RuntimeVisibleTypeAnnotations,RuntimeInvisibleTypeAnnotations
+-keepattributes Signature,InnerClasses,EnclosingMethod
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Kotlin Metadata & Serialization
+-keep class kotlin.Metadata { *; }
+
+# Keep Firestore & Local Save / Network Data Models
+-keep class com.example.data.** { *; }
+-keep class com.example.game.** { *; }
+-keep class com.example.network.** { *; }
+
+# Keep Enums for Firestore & Wire Deserialization
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# Google Auth / Drive OAuth Reflection Keep Rules
+-keep class com.google.android.gms.auth.GoogleAuthUtil { *; }
+-dontwarn com.google.android.gms.auth.**
+-dontwarn com.google.firebase.appcheck.debug.**
+

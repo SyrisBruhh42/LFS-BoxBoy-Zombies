@@ -47,6 +47,9 @@ import com.example.ui.BioNoirSpriteAtlasRegistry.drawBioNoirRoofOverlay
 import com.example.ui.BioNoirSpriteAtlasRegistry.drawCanopyOverhangSprite
 import com.example.ui.BioNoirSpriteAtlasRegistry.drawOverlappingFoliageSprite
 import com.example.ui.BioNoirSpriteAtlasRegistry.drawSquadMemberOrthographic
+import com.example.ui.render.PersistentSurfaceDecal
+import com.example.ui.render.SurfaceDecalKind
+import com.example.ui.render.VoxelBoxIsometricPipeline
 import com.example.ui.theme.CryoCyan
 import com.example.ui.theme.HandheldObsidian
 import com.example.ui.theme.MysteryGold
@@ -68,7 +71,7 @@ import kotlin.math.sin
  * 1. True 3/4 Orthographic Projection (Y-axis foreshortening + 3D vertical Z-extrusion for walls,
  *    pillars, perk machines, barrels, and characters with roof caps, front facades, and drop shadows).
  * 2. Zero per-frame heap allocations in tight loops (reuses a single scratch Path for shadow volumes
- *    and directional cones, eliminating GC pauses and frame stutter).
+ *    and directional cones, and a pre-allocated YDrawEntry pool for true back-to-front painter's Y-sorting).
  * 3. Rich articulated procedural art for BoxBoy Survivor (walking boots, 3D armored torso, pauldron
  *    trim, glowing helmet visor, dual-hand weapon with muzzle flash & recoil) and all 6 enemy archetypes.
  */
@@ -81,6 +84,33 @@ object OrthographicWorldRenderer {
 
     // Reusable scratch Path so 60 FPS Canvas drawing allocates 0 Path objects per frame
     private val scratchPath = Path()
+
+    private const val Y_KIND_OUTCROP = 1
+    private const val Y_KIND_BUILDING = 2
+    private const val Y_KIND_PILLAR = 3
+    private const val Y_KIND_ROAD_PROP = 4
+    private const val Y_KIND_TREE = 5
+    private const val Y_KIND_STATION = 6
+    private const val Y_KIND_FORT = 7
+    private const val Y_KIND_BARREL = 8
+    private const val Y_KIND_LOOT = 9
+    private const val Y_KIND_ZOMBIE = 10
+    private const val Y_KIND_SQUAD_PEER = 11
+    private const val Y_KIND_LEGACY_COOP = 12
+    private const val Y_KIND_LOCAL_PLAYER = 13
+
+    private class YDrawEntry : Comparable<YDrawEntry> {
+        var sortY: Float = 0f
+        var kind: Int = 0
+        var index: Int = 0
+        override fun compareTo(other: YDrawEntry): Int {
+            val cmp = sortY.compareTo(other.sortY)
+            return if (cmp != 0) cmp else kind.compareTo(other.kind)
+        }
+    }
+
+    private val yDrawPool = Array(1024) { YDrawEntry() }
+    private val yDrawQueue = ArrayList<YDrawEntry>(1024)
 
     fun DrawScope.renderOrthographicWorld(
         state: GameSessionState,
@@ -258,13 +288,54 @@ object OrthographicWorldRenderer {
             )
         }
 
-        // 3. Depth-Sorted (Painter's Algorithm by Y) 3/4 Orthographic 3D Jagged Borders, Town Buildings, Trees & Props
+        // 2b. Render Persistent Surface Decals (Barrel Scorch Craters, Zombie Ichor Splatters, Cryo Frost Rime)
+        val surfaceDecals = state.surfaceDecals
+        for (i in 0 until surfaceDecals.size) {
+            val decal = surfaceDecals[i]
+            if (decal.worldX + decal.radiusPx < cullMinX || decal.worldX - decal.radiusPx > cullMaxX ||
+                decal.worldY + decal.radiusPx < cullMinY || decal.worldY - decal.radiusPx > cullMaxY
+            ) {
+                continue
+            }
+            val dCol = Color(decal.colorArgb)
+            val rx = decal.radiusPx
+            val ry = decal.radiusPx * ORTHO_Y_SCALE
+            drawOval(
+                color = dCol.copy(alpha = (dCol.alpha * 0.55f).coerceIn(0.12f, 0.75f)),
+                topLeft = Offset(decal.worldX - rx, decal.worldY - ry),
+                size = Size(rx * 2f, ry * 2f)
+            )
+            if (decal.kind == SurfaceDecalKind.BARREL_SCORCH_CRATER) {
+                drawOval(
+                    color = Color(0x66FF595E),
+                    topLeft = Offset(decal.worldX - rx * 0.55f, decal.worldY - ry * 0.55f),
+                    size = Size(rx * 1.1f, ry * 1.1f),
+                    style = Stroke(width = 1.6f)
+                )
+            }
+        }
+
+        // 3. Unified Y-Sorted Painter's Algorithm Draw Queue (0 per-frame allocations via yDrawPool)
+        yDrawQueue.clear()
+        var poolCursor = 0
+        fun enqueueYDraw(sortY: Float, kind: Int, index: Int) {
+            val entry = if (poolCursor < yDrawPool.size) {
+                yDrawPool[poolCursor++]
+            } else {
+                YDrawEntry()
+            }
+            entry.sortY = sortY
+            entry.kind = kind
+            entry.index = index
+            yDrawQueue.add(entry)
+        }
+
         val jaggedOutcrops = state.map.jaggedPerimeterOutcrops
         for (i in 0 until jaggedOutcrops.size) {
             val oc = jaggedOutcrops[i]
             val b = oc.bounds
-            if (b.bottom <= py && b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
-                drawJaggedPerimeterOutcrop3D(oc, oc.roomIndex in state.unlockedRooms)
+            if (b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
+                enqueueYDraw(b.bottom, Y_KIND_OUTCROP, i)
             }
         }
 
@@ -273,223 +344,177 @@ object OrthographicWorldRenderer {
             for (i in 0 until townBuildings.size) {
                 val tb = townBuildings[i]
                 val b = tb.bounds
-                if (b.bottom <= py && b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
-                    drawTownBuilding3D(tb)
+                if (b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
+                    enqueueYDraw(b.bottom, Y_KIND_BUILDING, i)
                 }
             }
         } else {
             for (i in 0 until obstacles.size) {
                 val pillar = obstacles[i]
-                if (pillar.bottom <= py && pillar.right >= cullMinX && pillar.left <= cullMaxX && pillar.bottom >= cullMinY && pillar.top - 45f <= cullMaxY) {
-                    drawOrthographicPillar3D(pillar)
+                if (pillar.right >= cullMinX && pillar.left <= cullMaxX && pillar.bottom >= cullMinY && pillar.top - 45f <= cullMaxY) {
+                    val proj = VoxelBoxIsometricPipeline.projectVoxelBox25D(
+                        entityId = "pillar_$i",
+                        worldX = pillar.center.x,
+                        worldY = pillar.bottom,
+                        widthX = pillar.width,
+                        depthY = pillar.height,
+                        heightZ = PILLAR_Z_HEIGHT,
+                        primaryLightX = px,
+                        primaryLightY = py
+                    )
+                    enqueueYDraw(proj.sortDepthKey, Y_KIND_PILLAR, i)
                 }
             }
         }
 
-        // Render 3D Roadside Props behind player (y <= py)
         val roadProps = state.map.roadSideProps
         for (i in 0 until roadProps.size) {
             val rp = roadProps[i]
-            if (rp.y <= py && rp.roomIndex in state.unlockedRooms &&
-                rp.x in cullMinX..cullMaxX && rp.y in cullMinY..cullMaxY
-            ) {
-                drawRoadSideProp3D(rp)
+            if (rp.roomIndex in state.unlockedRooms && rp.x in cullMinX..cullMaxX && rp.y in cullMinY..cullMaxY) {
+                enqueueYDraw(rp.y, Y_KIND_ROAD_PROP, i)
             }
         }
 
-        // Render 3D Trees behind player (y <= py)
         for (i in 0 until foliageList.size) {
             val fol = foliageList[i]
-            if (fol.heightZ > 20f && fol.y <= py && fol.roomIndex in state.unlockedRooms &&
+            if (fol.heightZ > 20f && fol.roomIndex in state.unlockedRooms &&
                 fol.x + fol.radius >= cullMinX && fol.x - fol.radius <= cullMaxX &&
                 fol.y + fol.radius >= cullMinY && fol.y - fol.radius - fol.heightZ <= cullMaxY
             ) {
-                drawTreeFoliage3D(fol)
+                enqueueYDraw(fol.y, Y_KIND_TREE, i)
             }
         }
 
         val stations = state.map.stations
         for (i in 0 until stations.size) {
             val st = stations[i]
-            if (st.y <= py && st.x in cullMinX..cullMaxX && st.y in cullMinY..cullMaxY) {
-                drawOrthographicStation3D(st, state.unlockedRooms)
+            if (st.x in cullMinX..cullMaxX && st.y in cullMinY..cullMaxY) {
+                enqueueYDraw(st.y, Y_KIND_STATION, i)
             }
         }
 
         val forts = state.fortifications
         for (i in 0 until forts.size) {
             val fort = forts[i]
-            if (fort.y <= py && fort.x in cullMinX..cullMaxX && fort.y in cullMinY..cullMaxY) {
-                drawOrthographicFortification3D(fort)
+            if (fort.x in cullMinX..cullMaxX && fort.y in cullMinY..cullMaxY) {
+                enqueueYDraw(fort.y, Y_KIND_FORT, i)
             }
         }
 
         val barrels = state.map.barrels
         for (i in 0 until barrels.size) {
             val barrel = barrels[i]
-            if (!barrel.isDetonated && barrel.y <= py && barrel.x in cullMinX..cullMaxX && barrel.y in cullMinY..cullMaxY) {
-                drawOrthographicBarrel3D(barrel)
+            if (!barrel.isDetonated && barrel.x in cullMinX..cullMaxX && barrel.y in cullMinY..cullMaxY) {
+                enqueueYDraw(barrel.y, Y_KIND_BARREL, i)
             }
         }
 
         val drops = state.lootDrops
         for (i in 0 until drops.size) {
             val drop = drops[i]
-            if (drop.y <= py && drop.x in cullMinX..cullMaxX && drop.y in cullMinY..cullMaxY) {
-                drawOrthographicLootDrop3D(drop, worldAnimRad)
+            if (drop.x in cullMinX..cullMaxX && drop.y in cullMinY..cullMaxY) {
+                enqueueYDraw(drop.y, Y_KIND_LOOT, i)
             }
         }
 
-        // Draw Zombies behind player (y <= py)
         val zombies = state.zombies
         for (i in 0 until zombies.size) {
             val z = zombies[i]
-            if (z.y <= py && z.x in cullMinX..cullMaxX && z.y in cullMinY..cullMaxY) {
-                drawOrthographicZombieSprite(
-                    zombie = z,
-                    playerX = px,
-                    playerY = py,
-                    isLightLocked = z.id == state.lightLockTargetId,
-                    animPhase = worldAnimRad * z.archetype.speedMultiplier + z.id * 1.1f
-                )
+            if (z.x in cullMinX..cullMaxX && z.y in cullMinY..cullMaxY) {
+                enqueueYDraw(z.y, Y_KIND_ZOMBIE, i)
             }
         }
 
-        // Draw 4-Player Squad Peers & Legacy Co-Op Partner behind local player (y <= py)
         val squadPeers = state.coopPeers
         for (i in 0 until squadPeers.size) {
             val peer = squadPeers[i]
-            if (peer.y <= py && peer.x in cullMinX..cullMaxX && peer.y in cullMinY..cullMaxY) {
-                drawSquadMemberOrthographic(peer, peer.x, peer.y, scale = 1.05f)
-            }
-        }
-        if (coopPeer != null && coopPeer.y <= py && squadPeers.none { it.peerId == coopPeer.peerId }) {
-            drawOrthographicCoopPartner(coopPeer, worldAnimRad)
-        }
-
-        // Draw Local Player Downed/Revive Ring if in Bleedout State
-        if (state.isPlayerDowned) {
-            val ringRad = 28f
-            drawCircle(
-                color = Color(0x55EF4444),
-                radius = ringRad,
-                center = Offset(px, py)
-            )
-            drawArc(
-                color = PhosphorGreen,
-                startAngle = -90f,
-                sweepAngle = 360f * state.playerReviveProgress.coerceIn(0f, 1f),
-                useCenter = false,
-                topLeft = Offset(px - ringRad, py - ringRad),
-                size = Size(ringRad * 2f, ringRad * 2f),
-                style = Stroke(width = 4f)
-            )
-        }
-
-        // Draw Local Armored Survivor (with 3/4 Orthographic 3D Extrusion, Walking Boots & Articulated Gun)
-        drawOrthographicPlayerSprite(
-            state = state,
-            walkPhaseRad = walkPhaseRad,
-            isMoving = isMoving
-        )
-
-        // Draw 4-Player Squad Peers & Legacy Co-Op Partner in front of local player (y > py)
-        for (i in 0 until squadPeers.size) {
-            val peer = squadPeers[i]
-            if (peer.y > py && peer.x in cullMinX..cullMaxX && peer.y in cullMinY..cullMaxY) {
-                drawSquadMemberOrthographic(peer, peer.x, peer.y, scale = 1.05f)
-            }
-        }
-        if (coopPeer != null && coopPeer.y > py && squadPeers.none { it.peerId == coopPeer.peerId }) {
-            drawOrthographicCoopPartner(coopPeer, worldAnimRad)
-        }
-
-        // Draw Zombies in front of player (y > py)
-        for (i in 0 until zombies.size) {
-            val z = zombies[i]
-            if (z.y > py && z.x in cullMinX..cullMaxX && z.y in cullMinY..cullMaxY) {
-                drawOrthographicZombieSprite(
-                    zombie = z,
-                    playerX = px,
-                    playerY = py,
-                    isLightLocked = z.id == state.lightLockTargetId,
-                    animPhase = worldAnimRad * z.archetype.speedMultiplier + z.id * 1.1f
-                )
+            if (peer.x in cullMinX..cullMaxX && peer.y in cullMinY..cullMaxY) {
+                enqueueYDraw(peer.y, Y_KIND_SQUAD_PEER, i)
             }
         }
 
-        // Foreground Props (y > py) -- player walks behind these 3D buildings/trees/barrels/stations!
-        for (i in 0 until drops.size) {
-            val drop = drops[i]
-            if (drop.y > py && drop.x in cullMinX..cullMaxX && drop.y in cullMinY..cullMaxY) {
-                drawOrthographicLootDrop3D(drop, worldAnimRad)
-            }
+        if (coopPeer != null && squadPeers.none { it.peerId == coopPeer.peerId }) {
+            enqueueYDraw(coopPeer.y, Y_KIND_LEGACY_COOP, 0)
         }
 
-        for (i in 0 until barrels.size) {
-            val barrel = barrels[i]
-            if (!barrel.isDetonated && barrel.y > py && barrel.x in cullMinX..cullMaxX && barrel.y in cullMinY..cullMaxY) {
-                drawOrthographicBarrel3D(barrel)
-            }
-        }
+        enqueueYDraw(py, Y_KIND_LOCAL_PLAYER, 0)
 
-        for (i in 0 until forts.size) {
-            val fort = forts[i]
-            if (fort.y > py && fort.x in cullMinX..cullMaxX && fort.y in cullMinY..cullMaxY) {
-                drawOrthographicFortification3D(fort)
-            }
-        }
+        yDrawQueue.sort()
 
-        for (i in 0 until stations.size) {
-            val st = stations[i]
-            if (st.y > py && st.x in cullMinX..cullMaxX && st.y in cullMinY..cullMaxY) {
-                drawOrthographicStation3D(st, state.unlockedRooms)
-            }
-        }
-
-        // Render 3D Trees in front of player (y > py)
-        for (i in 0 until foliageList.size) {
-            val fol = foliageList[i]
-            if (fol.heightZ > 20f && fol.y > py && fol.roomIndex in state.unlockedRooms &&
-                fol.x + fol.radius >= cullMinX && fol.x - fol.radius <= cullMaxX &&
-                fol.y + fol.radius >= cullMinY && fol.y - fol.radius - fol.heightZ <= cullMaxY
-            ) {
-                drawTreeFoliage3D(fol)
-            }
-        }
-
-        // Render 3D Roadside Props in front of player (y > py)
-        for (i in 0 until roadProps.size) {
-            val rp = roadProps[i]
-            if (rp.y > py && rp.roomIndex in state.unlockedRooms &&
-                rp.x in cullMinX..cullMaxX && rp.y in cullMinY..cullMaxY
-            ) {
-                drawRoadSideProp3D(rp)
-            }
-        }
-
-        if (townBuildings.size == obstacles.size) {
-            for (i in 0 until townBuildings.size) {
-                val tb = townBuildings[i]
-                val b = tb.bounds
-                if (b.bottom > py && b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
-                    drawTownBuilding3D(tb)
+        for (qIdx in 0 until yDrawQueue.size) {
+            val item = yDrawQueue[qIdx]
+            when (item.kind) {
+                Y_KIND_OUTCROP -> {
+                    val oc = jaggedOutcrops[item.index]
+                    drawJaggedPerimeterOutcrop3D(oc, oc.roomIndex in state.unlockedRooms)
                 }
-            }
-        } else {
-            for (i in 0 until obstacles.size) {
-                val pillar = obstacles[i]
-                if (pillar.bottom > py && pillar.right >= cullMinX && pillar.left <= cullMaxX && pillar.bottom >= cullMinY && pillar.top - 45f <= cullMaxY) {
-                    drawOrthographicPillar3D(pillar)
+                Y_KIND_BUILDING -> {
+                    drawTownBuilding3D(townBuildings[item.index])
                 }
-            }
-        }
-
-        for (i in 0 until jaggedOutcrops.size) {
-            val oc = jaggedOutcrops[i]
-            val b = oc.bounds
-            if (b.bottom > py && b.right >= cullMinX && b.left <= cullMaxX && b.bottom >= cullMinY && b.top - 65f <= cullMaxY) {
-                drawJaggedPerimeterOutcrop3D(oc, oc.roomIndex in state.unlockedRooms)
+                Y_KIND_PILLAR -> {
+                    drawOrthographicPillar3D(obstacles[item.index])
+                }
+                Y_KIND_ROAD_PROP -> {
+                    drawRoadSideProp3D(roadProps[item.index])
+                }
+                Y_KIND_TREE -> {
+                    drawTreeFoliage3D(foliageList[item.index])
+                }
+                Y_KIND_STATION -> {
+                    drawOrthographicStation3D(stations[item.index], state.unlockedRooms)
+                }
+                Y_KIND_FORT -> {
+                    drawOrthographicFortification3D(forts[item.index])
+                }
+                Y_KIND_BARREL -> {
+                    drawOrthographicBarrel3D(barrels[item.index])
+                }
+                Y_KIND_LOOT -> {
+                    drawOrthographicLootDrop3D(drops[item.index], worldAnimRad)
+                }
+                Y_KIND_ZOMBIE -> {
+                    val z = zombies[item.index]
+                    drawOrthographicZombieSprite(
+                        zombie = z,
+                        playerX = px,
+                        playerY = py,
+                        isLightLocked = z.id == state.lightLockTargetId,
+                        animPhase = worldAnimRad * z.archetype.speedMultiplier + z.id * 1.1f
+                    )
+                }
+                Y_KIND_SQUAD_PEER -> {
+                    val peer = squadPeers[item.index]
+                    drawSquadMemberOrthographic(peer, peer.x, peer.y, scale = 1.05f)
+                }
+                Y_KIND_LEGACY_COOP -> {
+                    if (coopPeer != null) {
+                        drawOrthographicCoopPartner(coopPeer, worldAnimRad)
+                    }
+                }
+                Y_KIND_LOCAL_PLAYER -> {
+                    if (state.isPlayerDowned) {
+                        val ringRad = 28f
+                        drawCircle(
+                            color = Color(0x55EF4444),
+                            radius = ringRad,
+                            center = Offset(px, py)
+                        )
+                        drawArc(
+                            color = PhosphorGreen,
+                            startAngle = -90f,
+                            sweepAngle = 360f * state.playerReviveProgress.coerceIn(0f, 1f),
+                            useCenter = false,
+                            topLeft = Offset(px - ringRad, py - ringRad),
+                            size = Size(ringRad * 2f, ringRad * 2f),
+                            style = Stroke(width = 4f)
+                        )
+                    }
+                    drawOrthographicPlayerSprite(
+                        state = state,
+                        walkPhaseRad = walkPhaseRad,
+                        isMoving = isMoving
+                    )
+                }
             }
         }
 

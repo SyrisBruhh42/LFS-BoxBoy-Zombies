@@ -753,8 +753,46 @@ class OasisHostedServerClient(
     }
 
     /**
+     * Races Tailscale Laputa `:19448`, LAN Host `:19448`, Android Emulator Bridge `10.0.2.2:19448`,
+     * `127.0.0.1:19448`, and `U2` endpoints to select the fastest reachable endpoint (`FP-N06`).
+     */
+    suspend fun probeAndSelectReachableEndpoint(
+        lanHostIp: String? = null
+    ): String = withContext(Dispatchers.IO) {
+        val cfg = _endpointConfig.value
+        val candidates = buildList {
+            if (cfg.customServerUrl.isNotBlank()) add(cfg.customServerUrl.trim().trimEnd('/'))
+            if (cfg.tailscaleLaputaHosterUrl.isNotBlank()) add(cfg.tailscaleLaputaHosterUrl.trim().trimEnd('/'))
+            if (!lanHostIp.isNullOrBlank() && lanHostIp != "127.0.0.1") add("http://$lanHostIp:19448")
+            add("http://10.0.2.2:19448")
+            add(cfg.localHosterUrl.trim().trimEnd('/'))
+            if (cfg.tailscaleAnchorHost.isNotBlank()) add(cfg.tailscaleAnchorHost.trim().trimEnd('/'))
+            add(cfg.primaryEdgeHost.trim().trimEnd('/'))
+        }.filter { it.isNotBlank() }.distinct()
+
+        val winner = raceHappyEyeballsEndpoints(
+            candidateUrls = candidates,
+            staggerMs = 120L
+        ) { baseUrl ->
+            val probeUrl = if (isU3HosterEndpoint(baseUrl)) "$baseUrl/health" else "$baseUrl/api/lfs/sync/hoster"
+            val req = Request.Builder()
+                .url(probeUrl)
+                .get()
+                .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                .header("X-Aegis-Tailscale-Node", _handshakeState.value.stableNodeId)
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) baseUrl else null
+            }
+        }
+        val selected = winner ?: candidates.firstOrNull() ?: cfg.localHosterUrl
+        _telemetry.value = _telemetry.value.copy(activeEndpointUrl = selected)
+        selected
+    }
+
+    /**
      * Seals a [CryptoSyncEngine.GameSaveSnapshot] into the canonical 6-Gate `aegisEnvelopeV1`
-     * structure and commits it to Oasis SaveLab custody (`POST $baseUrl/api/lfs/sync/saves`,
+     * structure and commits it to Oasis SaveLab custody (`POST $baseUrl/api/lfs/sync/saves` or `/v1/hoster/save`,
      * `slotKey` in `"slot_01".."slot_20"`, `capsuleTarget = "lfs-trash-arcade"`,
      * `cartridgeSlug = "lfs-boxboy-zombies"`, `replicateToAnchor = true`).
      */
@@ -764,34 +802,45 @@ class OasisHostedServerClient(
         generation: Int = 1
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         val normalizedSlotKey = CryptoSyncEngine.normalizeSlotKey(slotKey)
+        val roomCode = _telemetry.value.activeRoom.roomCode
         val envelopeObj = CryptoSyncEngine.sealSixGateAegisEnvelopeV1(
             slotKey = normalizedSlotKey,
             snapshot = snapshot,
             generation = generation,
-            passphrase = currentPassphrase
+            passphrase = currentPassphrase,
+            roomId = roomCode
         )
         val requestBodyObj = AegisJsonObject().apply {
+            put("room_id", roomCode)
+            put("roomId", roomCode)
             put("slotKey", normalizedSlotKey)
             put("slot_key", normalizedSlotKey)
             put("capsuleTarget", "lfs-trash-arcade")
+            put("capsule_id", "lfs-boxboy-zombies")
             put("cartridgeSlug", "lfs-boxboy-zombies")
             put("replicateToAnchor", true)
             put("generation", generation.coerceAtLeast(1))
+            put("payload", envelopeObj)
             put("envelope", envelopeObj)
+            put("aegisEnvelopeV1", envelopeObj)
         }
 
         val cfg = _endpointConfig.value
         val candidateUrls = listOf(
+            cfg.localHosterUrl.trimEnd('/'),
+            cfg.tailscaleLaputaHosterUrl.trimEnd('/'),
             cfg.tailscaleAnchorHost.trimEnd('/'),
             cfg.primaryEdgeHost.trimEnd('/')
         ).filter { it.isNotBlank() }.distinct()
 
         for (baseUrl in candidateUrls) {
             try {
+                val savePath = if (isU3HosterEndpoint(baseUrl)) "/v1/hoster/save" else "/api/lfs/sync/saves"
                 val req = Request.Builder()
-                    .url("$baseUrl/api/lfs/sync/saves")
+                    .url("$baseUrl$savePath")
                     .header("Content-Type", JSON_UTF8_MEDIA_TYPE)
                     .header("X-Oasis-Protocol", "oasis-v2-cp12")
+                    .header("X-Aegis-Tailscale-Node", _handshakeState.value.stableNodeId)
                     .post(requestBodyObj.toString().toRequestBody(JSON_UTF8_MEDIA_TYPE.toMediaType()))
                     .build()
                 httpClient.newCall(req).execute().use { resp ->
@@ -1235,6 +1284,7 @@ class OasisHostedServerClient(
         fun resolveCandidateEndpoints(cfg: LfsServerEndpointConfig): List<String> = buildList {
             if (cfg.customServerUrl.isNotBlank()) add(cfg.customServerUrl.trim().trimEnd('/'))
             add(cfg.localHosterUrl.trim().trimEnd('/'))
+            add("http://10.0.2.2:19448")
             if (cfg.tailscaleLaputaHosterUrl.isNotBlank()) add(cfg.tailscaleLaputaHosterUrl.trim().trimEnd('/'))
             if (cfg.tailscaleAnchorHost.isNotBlank()) add(cfg.tailscaleAnchorHost.trim().trimEnd('/'))
             add(cfg.primaryEdgeHost.trim().trimEnd('/'))
@@ -1312,7 +1362,7 @@ class OasisHostedServerClient(
             maxPlayers: Int = 4
         ): String {
             fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
-            return """{"room_id":"${esc(cleanCode)}","room_code":"${esc(cleanCode)}","game_id":"lfs-boxboy-zombies","host_mode":"${hostMode.wireId}","engine_kind":"ENGINE_A2_HEADLESS_NODE_VM_WORKER","lifecycle_policy":"${lifecyclePolicy.wireId}","initial_state":{"roomTitle":"${esc(roomTitle)}","mapSeed":$mapSeed,"currentWave":$currentWave,"maxPlayers":$maxPlayers},"lease_ttl_sec":7200}"""
+            return """{"room_id":"${esc(cleanCode)}","room_code":"${esc(cleanCode)}","game_id":"lfs-boxboy-zombies","host_mode":"${hostMode.wireId}","hosting_mode":"${hostMode.wireId}","engine_kind":"ENGINE_A2_HEADLESS_NODE_VM_WORKER","lifecycle_policy":"${lifecyclePolicy.wireId}","initial_state":{"roomTitle":"${esc(roomTitle)}","mapSeed":$mapSeed,"currentWave":$currentWave,"maxPlayers":$maxPlayers},"lease_ttl_sec":7200}"""
         }
 
         /**

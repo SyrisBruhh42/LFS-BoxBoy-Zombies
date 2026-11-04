@@ -1,11 +1,16 @@
 package com.example
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -14,12 +19,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.BoxBoyRepository
+import com.example.data.TrashArcadeLaunchParams
+import com.example.input.ControllerManager
 import com.example.ui.AuthScreen
 import com.example.ui.GameScreen
 import com.example.ui.signOut
@@ -27,6 +37,7 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.util.configureAppCheck
 import com.example.viewmodel.BoxBoyViewModel
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -34,13 +45,13 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOf
 
-import android.content.Intent
-import android.os.SystemClock
-import android.view.KeyEvent
-import androidx.compose.runtime.LaunchedEffect
-import com.example.data.TrashArcadeLaunchParams
-import com.example.input.ControllerManager
+internal fun isFirebaseInitialized(context: Context): Boolean {
+    return runCatching {
+        FirebaseApp.getApps(context).isNotEmpty()
+    }.getOrDefault(false)
+}
 
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -115,16 +126,28 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppNavigation(
-    auth: FirebaseAuth = Firebase.auth,
+    auth: FirebaseAuth? = null,
     launchParams: TrashArcadeLaunchParams = TrashArcadeLaunchParams()
 ) {
-    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val context = LocalContext.current
+    val effectiveAuth: FirebaseAuth? = remember(auth, context) {
+        auth ?: if (isFirebaseInitialized(context)) {
+            runCatching { Firebase.auth }.getOrNull()
+        } else {
+            null
+        }
+    }
+    val authFlow = remember(effectiveAuth) {
+        effectiveAuth?.authStateFlow() ?: flowOf(null)
+    }
+    val currentUser by authFlow.collectAsStateWithLifecycle(
+        initialValue = runCatching { effectiveAuth?.currentUser }.getOrNull()
+    )
     val user = currentUser
     var isOfflineMode by rememberSaveable {
-        mutableStateOf(launchParams.oasisAutostart || launchParams.hasDeepLinkOverrides)
+        mutableStateOf(true)
     }
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
 
@@ -144,17 +167,39 @@ fun AppNavigation(
                         "APPLICATION_KEY missing from CreationExtras"
                     }
                     val databaseId = app.getString(R.string.firestore_database_id)
-                    val db = FirebaseFirestore.getInstance(databaseId)
+                    val repo = if (isFirebaseInitialized(app)) {
+                        runCatching {
+                            val db = FirebaseFirestore.getInstance(databaseId)
+                            BoxBoyRepository(db)
+                        }.getOrNull()
+                    } else {
+                        null
+                    }
                     val prefs = app.getSharedPreferences("boxboy_offline_saves", Context.MODE_PRIVATE)
                     BoxBoyViewModel(
-                        repository = BoxBoyRepository(db),
+                        repository = repo,
                         localPrefs = prefs,
                         currentUserId = uid,
-                        isCloudAuthenticated = isCloudAuthenticated
+                        isCloudAuthenticated = isCloudAuthenticated && repo != null
                     )
                 }
             }
         )
+
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner, viewModel) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> viewModel.onAppForeground()
+                    Lifecycle.Event.ON_STOP -> viewModel.onAppBackground()
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        }
 
         LaunchedEffect(launchParams) {
             if (launchParams.hasDeepLinkOverrides) {

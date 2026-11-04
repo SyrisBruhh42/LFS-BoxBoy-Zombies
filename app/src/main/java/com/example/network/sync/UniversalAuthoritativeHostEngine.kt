@@ -5,8 +5,10 @@ import com.example.game.relics.Ror2PassiveRelicSystem
 import com.example.game.world.elona.AssembledSectionReceipt
 import com.example.game.world.elona.ElonaSocketFrontierEngine
 import com.example.game.world.elona.SparseWorldStateCache
-import org.json.JSONArray
-import org.json.JSONObject
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.Base64
+import kotlin.math.roundToInt
 
 /**
  * Track 7: Universal Authoritative Host Engine & Risk of Rain 2 Mid-Session Drop-In Synchronizer.
@@ -26,10 +28,80 @@ data class HotJoinDropPodPackage(
     val compactDeltaPayloadBytes: Int
 )
 
+/**
+ * 8-Byte Quantized Zombie Delta entry (`uint16 id, int16 xDeciPx, int16 yDeciPx, uint16 hp`)
+ * compressing 120 zombies from `11,040 B` verbose JSON down to `960 B` (`<1 KB` single MTU frame, `FP-N06`).
+ */
+data class QuantizedZombieSample(
+    val id: Int,
+    val x: Float,
+    val y: Float,
+    val hp: Int
+)
+
 object UniversalAuthoritativeHostEngine {
     const val PROTOCOL_VERSION = "BoxBoysNetProtocol-v3"
     const val BASE_STARTING_CURRENCY = 500
     const val CURRENCY_STIPEND_PER_WAVE = 650
+    const val BYTES_PER_QUANTIZED_ZOMBIE = 8
+
+    /**
+     * Packs a list of [QuantizedZombieSample] into a compact binary delta (`8` bytes per zombie:
+     * `uint16 id, int16 xDeciPx, int16 yDeciPx, uint16 hp`).
+     * 120 zombies = `960` bytes (`< 1 KB`).
+     */
+    fun packQuantizedZombieDelta(zombies: List<QuantizedZombieSample>): ByteArray {
+        val buf = ByteBuffer.allocate(zombies.size * BYTES_PER_QUANTIZED_ZOMBIE)
+            .order(ByteOrder.BIG_ENDIAN)
+        for (z in zombies) {
+            val clampedId = z.id.coerceIn(0, 65_535)
+            val xDeci = (z.x * 10f).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val yDeci = (z.y * 10f).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val clampedHp = z.hp.coerceIn(0, 65_535)
+            buf.putShort(clampedId.toShort())
+            buf.putShort(xDeci)
+            buf.putShort(yDeci)
+            buf.putShort(clampedHp.toShort())
+        }
+        return buf.array()
+    }
+
+    /**
+     * Unpacks a binary delta produced by [packQuantizedZombieDelta] back into [QuantizedZombieSample] records.
+     */
+    fun unpackQuantizedZombieDelta(bytes: ByteArray): List<QuantizedZombieSample> {
+        if (bytes.isEmpty()) return emptyList()
+        val count = bytes.size / BYTES_PER_QUANTIZED_ZOMBIE
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+        val out = ArrayList<QuantizedZombieSample>(count)
+        repeat(count) {
+            val id = buf.short.toInt() and 0xFFFF
+            val xDeci = buf.short.toInt()
+            val yDeci = buf.short.toInt()
+            val hp = buf.short.toInt() and 0xFFFF
+            out.add(
+                QuantizedZombieSample(
+                    id = id,
+                    x = xDeci / 10f,
+                    y = yDeci / 10f,
+                    hp = hp
+                )
+            )
+        }
+        return out
+    }
+
+    /**
+     * Encodes [zombies] as a Base64 wire frame (`1,280` chars for 120 zombies, fitting inside a single 1,500 B MTU frame).
+     */
+    fun packQuantizedZombieDeltaBase64(zombies: List<QuantizedZombieSample>): String {
+        return Base64.getEncoder().encodeToString(packQuantizedZombieDelta(zombies))
+    }
+
+    fun unpackQuantizedZombieDeltaBase64(encodedB64: String): List<QuantizedZombieSample> {
+        if (encodedB64.isBlank()) return emptyList()
+        return unpackQuantizedZombieDelta(Base64.getDecoder().decode(encodedB64.trim()))
+    }
 
     /**
      * Computes the Risk of Rain 2 style Mid-Session Drop-In package so a player joining at Wave W
@@ -100,3 +172,4 @@ object UniversalAuthoritativeHostEngine {
         return encoded
     }
 }
+

@@ -18,11 +18,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -82,6 +85,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -357,11 +361,16 @@ fun GameScreen(
         hapticsEnabled = storeSettings.hapticsEnabled
     )
 
-    BackHandler(enabled = isOasisOverlayOpen || activeSheet != ActiveEmulatorSheet.NONE || isWorldMapModalOpen) {
+    BackHandler(enabled = true) {
         when {
             isOasisOverlayOpen -> viewModel.toggleOasisUniversalOverlay(forceOpen = false)
             isWorldMapModalOpen -> isWorldMapModalOpen = false
-            else -> activeSheet = ActiveEmulatorSheet.NONE
+            activeSheet != ActiveEmulatorSheet.NONE -> activeSheet = ActiveEmulatorSheet.NONE
+            gameState.inspectedLootDrop != null -> viewModel.inspectLootDrop(null)
+            else -> {
+                viewModel.setPaused(true)
+                activeSheet = ActiveEmulatorSheet.TITLE_HUB
+            }
         }
     }
 
@@ -371,6 +380,7 @@ fun GameScreen(
 
     MyApplicationTheme(accessibilityState = controllerConfig.toAccessibilityThemeState()) {
     Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
         containerColor = if (controllerConfig.highContrastMode) HighContrastBlack else HandheldObsidian,
         modifier = Modifier
             .fillMaxSize()
@@ -587,6 +597,7 @@ fun GameScreen(
                         customWaypoint = customWaypoint,
                         isLandscape = isLandscape,
                         cameraZoomPercent = controllerConfig.cameraZoomPercent,
+                        dpadScale = (controllerConfig.dpadScalePercent / 100f).coerceIn(0.65f, 1.45f),
                         crtScanlines = controllerConfig.crtScanlinesEnabled && !controllerConfig.reduceMotionAndFlashes && !controllerConfig.highContrastMode,
                         highContrastMode = controllerConfig.highContrastMode,
                         colorblindHazardMarkers = controllerConfig.colorblindHazardMarkers,
@@ -1648,6 +1659,7 @@ private fun BoxBoyViewportCanvas(
     customWaypoint: Offset?,
     isLandscape: Boolean,
     cameraZoomPercent: Int,
+    dpadScale: Float = 1.0f,
     crtScanlines: Boolean,
     highContrastMode: Boolean = false,
     colorblindHazardMarkers: Boolean = false,
@@ -1683,18 +1695,10 @@ private fun BoxBoyViewportCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                // Direct 360 deg World Viewport Pointer/Mouse Aiming & Firing (ignores touches in virtual pad corners!)
-                .pointerInput(isTouchPadVisible) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = true)
-                        val cornerExclusionPx = 185.dp.toPx()
-                        val inBottomCornerPadZone = isTouchPadVisible &&
-                            down.position.y > (size.height - cornerExclusionPx) &&
-                            (down.position.x < cornerExclusionPx || down.position.x > (size.width - cornerExclusionPx))
-
-                        if (inBottomCornerPadZone) {
-                            return@awaitEachGesture
-                        }
+                // Direct 360 deg World Viewport Multi-Touch Pointer-ID Aiming & Firing (tracks independent aim pointer even while thumb holds D-Pad!)
+                .pointerInput(isTouchPadVisible, dpadScale) {
+                    awaitPointerEventScope {
+                        var aimPointerId: PointerId? = null
 
                         fun updateAimFromCanvasOffset(pos: Offset) {
                             val dxScreen = pos.x - size.width / 2f
@@ -1705,16 +1709,33 @@ private fun BoxBoyViewportCanvas(
                                 liveInput.pointerFireHold = true
                             }
                         }
-                        updateAimFromCanvasOffset(down.position)
+
                         while (true) {
                             val event = awaitPointerEvent()
-                            val active = event.changes.firstOrNull { it.pressed }
-                            if (active == null) {
-                                liveInput.pointerFireHold = false
-                                liveInput.pointerAimActive = false
-                                break
+                            val cornerExclusionPx = (196f * dpadScale.coerceIn(0.65f, 1.45f)).dp.toPx()
+
+                            if (aimPointerId == null) {
+                                val candidate = event.changes.firstOrNull { change ->
+                                    if (!change.pressed || change.isConsumed) return@firstOrNull false
+                                    val inBottomCornerPadZone = isTouchPadVisible &&
+                                        change.position.y > (size.height - cornerExclusionPx) &&
+                                        (change.position.x < cornerExclusionPx || change.position.x > (size.width - cornerExclusionPx))
+                                    !inBottomCornerPadZone
+                                }
+                                if (candidate != null) {
+                                    aimPointerId = candidate.id
+                                    updateAimFromCanvasOffset(candidate.position)
+                                }
+                            } else {
+                                val tracked = event.changes.firstOrNull { it.id == aimPointerId }
+                                if (tracked == null || !tracked.pressed) {
+                                    aimPointerId = null
+                                    liveInput.pointerFireHold = false
+                                    liveInput.pointerAimActive = false
+                                } else {
+                                    updateAimFromCanvasOffset(tracked.position)
+                                }
                             }
-                            updateAimFromCanvasOffset(active.position)
                         }
                     }
                 }
@@ -2050,7 +2071,7 @@ private fun BoxBoyViewportCanvas(
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp)
+                    .padding(bottom = if (!isLandscape && isTouchPadVisible) 220.dp else 12.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(HandheldObsidian.copy(alpha = 0.86f))
                     .border(1.dp, PackPurple.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
@@ -2237,15 +2258,24 @@ private fun ShoulderBumperButton(
             .background(if (isHolding) CryoCyan.copy(alpha = 0.28f) else HandheldObsidian)
             .border(1.5.dp, CryoCyan.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
             .pointerInput(isContinuousHold) {
-                detectTapGestures(
-                    onPress = {
-                        isHolding = true
-                        onPressChanged(true)
-                        tryAwaitRelease()
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val pid = down.id
+                    down.consume()
+                    isHolding = true
+                    onPressChanged(true)
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val active = event.changes.firstOrNull { it.id == pid && it.pressed }
+                            if (active == null) break
+                            active.consume()
+                        }
+                    } finally {
                         isHolding = false
                         onPressChanged(false)
                     }
-                )
+                }
             }
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag(tag)
@@ -2275,9 +2305,10 @@ private fun Virtual8WayDpad(
             .background(HandheldObsidian)
             .border(2.dp, PhosphorGreen.copy(alpha = 0.80f), CircleShape)
             .pointerInput(Unit) {
-                // Zero-slop continuous 360 deg analog pointer tracking: responds on the very first touch frame
+                // Zero-slop continuous 360 deg analog pointer-ID tracking: responds on the very first touch frame
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    val trackedPointerId = down.id
                     val center = Offset(size.width / 2f, size.height / 2f)
                     val maxRadius = max(size.width * 0.42f, 1f)
 
@@ -2292,16 +2323,19 @@ private fun Virtual8WayDpad(
                     updateFromPos(down.position)
                     down.consume()
 
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val activeChange = event.changes.firstOrNull { it.pressed }
-                        if (activeChange == null) {
-                            knobOffsetState.value = Offset.Zero
-                            onDirectionChanged(0f, 0f)
-                            break
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val activeChange = event.changes.firstOrNull { it.id == trackedPointerId && it.pressed }
+                            if (activeChange == null) {
+                                break
+                            }
+                            updateFromPos(activeChange.position)
+                            activeChange.consume()
                         }
-                        updateFromPos(activeChange.position)
-                        activeChange.consume()
+                    } finally {
+                        knobOffsetState.value = Offset.Zero
+                        onDirectionChanged(0f, 0f)
                     }
                 }
             }
@@ -2466,15 +2500,24 @@ private fun MappedArcadeButton(
             .background(if (isHolding) color else color.copy(alpha = if (isPrimaryFire) 0.28f else 0.2f))
             .border(if (isPrimaryFire) 2.5.dp else 2.dp, color, CircleShape)
             .pointerInput(buttonId, gamepadMapping) {
-                detectTapGestures(
-                    onPress = {
-                        isHolding = true
-                        onTouchButtonEvent(buttonId, true)
-                        tryAwaitRelease()
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val pid = down.id
+                    down.consume()
+                    isHolding = true
+                    onTouchButtonEvent(buttonId, true)
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val active = event.changes.firstOrNull { it.id == pid && it.pressed }
+                            if (active == null) break
+                            active.consume()
+                        }
+                    } finally {
                         isHolding = false
                         onTouchButtonEvent(buttonId, false)
                     }
-                )
+                }
             }
             .testTag(tag),
         contentAlignment = Alignment.Center

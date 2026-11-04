@@ -1,0 +1,48 @@
+--- app/src/main/java/com/example/game/ai/director/modules/BiomeWeatherAndFogDirector.kt
++++ app/src/main/java/com/example/game/ai/director/modules/BiomeWeatherAndFogDirector.kt
+@@ -35,8 +35,7 @@
+         }
+ 
+         // Use PRNG for deterministic biome weather
+         val rng = Random(seed xor (wave.toLong() * 31L) xor biomeTag.hashCode().toLong())
+-        val roll = abs(rng.nextInt()) % 100
++        val roll = rng.nextInt(100)
+ 
+         return when {
+@@ -75,7 +74,7 @@
+         condition = WeatherCondition.CLEAR,
+         lightingMode = LightingAtmosphereMode.CLASSIC_ARCADE_BRIGHT,
+         fogDensity = 0.0f,
+-        particleColorHex = 0x00000000,
++        particleColorHex = 0x00000000L,
+         particleCountModifier = 1.0f
+     )
+ }
+--- app/src/test/java/com/example/game/ai/director/modules/BiomeWeatherAndFogDirectorTest.kt
++++ app/src/test/java/com/example/game/ai/director/modules/BiomeWeatherAndFogDirectorTest.kt
+@@ -36,8 +35,7 @@
+         var targetSeed = 0L
+         while (true) {
+             val rng = Random(targetSeed xor (wave.toLong() * 31L) xor biomeTag.hashCode().toLong())
+-            if ((abs(rng.nextInt()) % 100) < 40) {
++            if (rng.nextInt(100) < 40) {
+                 break
+             }
+             targetSeed++
+@@ -62,8 +60,7 @@
+         var targetSeed = 0L
+         while (true) {
+             val rng = Random(targetSeed xor (wave.toLong() * 31L) xor biomeTag.hashCode().toLong())
+-            if ((abs(rng.nextInt()) % 100) < 60) {
++            if (rng.nextInt(100) < 60) {
+                 break
+             }
+             targetSeed++
+@@ -87,7 +84,7 @@
+         assertEquals(WeatherCondition.CLEAR, result.condition)
+         assertEquals(LightingAtmosphereMode.CLASSIC_ARCADE_BRIGHT, result.lightingMode)
+         assertEquals(0.0f, result.fogDensity, 0.01f)
+-        assertEquals(0x00000000, result.particleColorHex)
++        assertEquals(0x00000000L, result.particleColorHex)
+     }
+ }

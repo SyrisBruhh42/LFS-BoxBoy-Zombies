@@ -4,11 +4,20 @@ import com.example.data.DEFAULT_WEAPONS
 import com.example.data.OasisBotPersona
 import com.example.data.PerkType
 import com.example.data.WeaponSpec
+import com.example.game.combat.BarrelNode
+import com.example.game.combat.BoxheadComboAndPhysicsRegistry
+import com.example.game.combat.BoxheadComboState
+import com.example.game.economy.SingleCurrencyVendingEngine
+import com.example.game.economy.VendingStockSnapshot
+import com.example.game.relics.PassiveRelicKind
 import com.example.game.relics.PassiveRelicStackState
 import com.example.game.relics.Ror2PassiveRelicSystem
 import com.example.game.world.elona.AssembledSectionReceipt
 import com.example.game.world.elona.ElonaSocketFrontierEngine
+import com.example.game.world.elona.SparseWorldStateCache
 import com.example.network.CoopPeerState
+import com.example.ui.render.PersistentSurfaceDecal
+import com.example.ui.render.SurfaceDecalKind
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -19,6 +28,32 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 import kotlin.system.measureNanoTime
+
+fun Ror2PassiveRelicSystem.computeMoveSpeedMultiplier(state: PassiveRelicStackState): Float =
+    state.moveSpeedMultiplier
+
+fun Ror2PassiveRelicSystem.computeAttackSpeedMultiplier(state: PassiveRelicStackState): Float =
+    state.attackCadenceMultiplier
+
+fun Ror2PassiveRelicSystem.computeCrowbarMultiplier(
+    targetHp: Int,
+    targetMaxHp: Int,
+    state: PassiveRelicStackState
+): Float {
+    if (targetMaxHp <= 0) return 1.0f
+    return if (targetHp.toFloat() / targetMaxHp.toFloat() >= 0.90f) {
+        state.openingStrikeMultiplier
+    } else {
+        1.0f
+    }
+}
+
+fun Ror2PassiveRelicSystem.computeCritChanceBonus(state: PassiveRelicStackState): Float =
+    (0.05f * state.countOf(PassiveRelicKind.HARVESTERS_SCYTHE)).coerceAtMost(0.65f)
+
+fun DeterministicParticlePool.step(dtSeconds: Float) {
+    step((dtSeconds * 1000f).toLong().coerceAtLeast(1L))
+}
 
 enum class ZombieArchetype(
     val label: String,
@@ -110,7 +145,7 @@ data class BenchmarkReport(
 
 data class GameSessionState(
     val mapSeed: Long = 19960227L,
-    val map: ProceduralMap = ProceduralMapEngine.generateMap(19960227L, ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS),
+    val map: ProceduralMap = ProceduralMapEngine.generateMap(mapSeed, ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS),
     val unlockedRooms: Set<Int> = ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS,
     val playerX: Float = ProceduralMapEngine.DEFAULT_SPAWN_X,
     val playerY: Float = ProceduralMapEngine.DEFAULT_SPAWN_Y,
@@ -143,10 +178,10 @@ data class GameSessionState(
     val nearbyStation: InteractiveStation? = null,
     // Phase 1: Abyssal Bio-Noir Lighting & Camera Tension
     val cameraTension: CameraTensionState = CameraTensionState(),
-    // Phase 2: Non-Euclidean 7-Node Ring Buffer & Chunk Entropy
+    // Phase 2: Non-Euclidean 7-Node Ring Buffer & Chunk Entropy (reuses `map` instead of regenerating)
     val mazeState: NonEuclideanMazeState = MazeDirector.createInitialMazeState(
-        19960227L,
-        ProceduralMapEngine.generateMap(19960227L, ProceduralMapEngine.DEFAULT_UNLOCKED_ROOMS)
+        mapSeed,
+        map
     ),
     // Phase 3: Hybrid Combat, Archetypes & Auto-Drop Fortifications
     val selectedFortificationType: FortificationType = FortificationType.RED_BARREL,
@@ -174,11 +209,16 @@ data class GameSessionState(
     val playerReviveProgress: Float = 0f,
     val chunkSnapshot: ChunkStreamSnapshot = ChunkStreamSnapshot(),
     val passiveRelics: PassiveRelicStackState = PassiveRelicStackState(),
-    val elonaWorldReceipt: AssembledSectionReceipt = ElonaSocketFrontierEngine.generateInitialWorldReceipt(19960227L),
+    val elonaWorldReceipt: AssembledSectionReceipt = ElonaSocketFrontierEngine.generateInitialWorldReceipt(mapSeed),
     val clockMs: Long = 0L,
     val isPaused: Boolean = false,
     val isGameOver: Boolean = false,
-    val statusToast: String = "OPEN CITY ONLINE -- WASD Move | Click/Drag or Arrows to Aim & Fire!"
+    val statusToast: String = "OPEN CITY ONLINE -- WASD Move | Click/Drag or Arrows to Aim & Fire!",
+    val surfaceDecals: List<PersistentSurfaceDecal> = emptyList(),
+    val particlePool: DeterministicParticlePool = DeterministicParticlePool(capacity = 256),
+    val boxheadCombo: BoxheadComboState = BoxheadComboState(),
+    val vendingStock: VendingStockSnapshot = SingleCurrencyVendingEngine.generateWaveVendingStock(1, mapSeed),
+    val worldStateCache: SparseWorldStateCache = SparseWorldStateCache()
 ) {
     val currentWeapon: WeaponSpec
         get() {
@@ -225,9 +265,10 @@ data class GameSessionState(
  */
 class BoxBoyGameEngine {
     private var nextEntityId = 1
-    private var lastFireTimestampMs = 0L
+    private var lastFireTimestampMs = -10_000L
     private var lastSpawnTimestampMs = 0L
     private var lastEntropyBreachSpawnMs = 0L
+    private var lastRelicAuraTickMs = -10_000L
     private var clockMs = 0L
     val flowFieldServer = FlowFieldServer()
     val deterministicParticlePool = DeterministicParticlePool(capacity = 256)
@@ -248,7 +289,7 @@ class BoxBoyGameEngine {
 
         val speedCfg = state.speedConfig
         val scaledDeltaMs = (deltaMsRaw.coerceIn(4L, 100L) * speedCfg.clockMultiplier).toLong().coerceAtLeast(1L)
-        clockMs += scaledDeltaMs
+        clockMs = max(clockMs, state.clockMs) + scaledDeltaMs
 
         var moveX = moveXInput
         var moveY = moveYInput
@@ -302,7 +343,10 @@ class BoxBoyGameEngine {
         var comboCount = state.comboCount
         var comboTimerMs = (state.comboTimerMs - scaledDeltaMs).coerceAtLeast(0L)
         if (comboTimerMs == 0L) comboCount = 0
+        var boxheadCombo = BoxheadComboAndPhysicsRegistry.stepComboTimer(state.boxheadCombo, scaledDeltaMs)
         var depthEscrow = state.depthEscrow
+        var elonaWorldReceipt = state.elonaWorldReceipt
+        var vendingStock = state.vendingStock
 
         val zombies = state.zombies.map { it.copy() }.toMutableList()
         val tracers = state.tracers.mapNotNull {
@@ -326,9 +370,12 @@ class BoxBoyGameEngine {
         val enemyProjectiles = state.enemyProjectiles.map { it.copy() }.toMutableList()
         val elementalPuddles = state.elementalPuddles.map { it.copy() }.toMutableList()
         val lootDrops = state.lootDrops.toMutableList()
+        val surfaceDecals = state.surfaceDecals.toMutableList()
         var passiveRelics = state.passiveRelics
 
         val dtSec = scaledDeltaMs / 1000f
+        deterministicParticlePool.step(dtSec)
+        state.particlePool.step(dtSec)
 
         // PHASE 3: Step Ranged Stalkers, Elemental Weavers, Projectiles, Puddles & Fortifications
         val (phase3Damage, puddleSlowFactor) = TacticalCombatCoordinator.stepPhase3Combat(
@@ -360,7 +407,8 @@ class BoxBoyGameEngine {
         // 1. Player Movement & Room Bounds Collision (with Velocity Inertia + 2x Physics Sub-Stepping + Smooth Corner-Slide)
         val perkSpeedBoost = if (PerkType.STAMIN_UP in state.activePerks) 1.25f else 1.0f
         val armorSpeedBoost = state.armorRig.totalMoveSpeedMultiplier
-        val moveSpeedPxPerSec = 232f * perkSpeedBoost * armorSpeedBoost * effectivePuddleSlow * speedCfg.playerMoveMultiplier
+        val relicMoveBoost = Ror2PassiveRelicSystem.computeMoveSpeedMultiplier(passiveRelics)
+        val moveSpeedPxPerSec = 232f * perkSpeedBoost * armorSpeedBoost * relicMoveBoost * effectivePuddleSlow * speedCfg.playerMoveMultiplier
 
         val targetVelX = moveX * moveSpeedPxPerSec
         val targetVelY = moveY * moveSpeedPxPerSec
@@ -506,10 +554,11 @@ class BoxBoyGameEngine {
         }
 
         val perkFireRateFactor = if (PerkType.DOUBLE_TAP in state.activePerks) 0.68f else 1.0f
+        val relicAttackSpeedBoost = Ror2PassiveRelicSystem.computeAttackSpeedMultiplier(passiveRelics)
         val tierStats = WeaponUpgradeProgression.getTierStats(weaponLvl)
         val effectiveCooldown = (
             (modWeapon.effectiveFireCooldownMs * perkFireRateFactor * tierStats.fireCooldownMultiplier) /
-                speedCfg.fireReloadMultiplier.coerceAtLeast(0.25f)
+                (speedCfg.fireReloadMultiplier * relicAttackSpeedBoost).coerceAtLeast(0.25f)
             ).toLong().coerceAtLeast(35L)
 
         var didFireThisTick = false
@@ -532,18 +581,58 @@ class BoxBoyGameEngine {
                 var endX = nx + cos(shotAngle) * maxRange
                 var endY = ny + sin(shotAngle) * maxRange
 
-                // Check barrel hits
+                // Check barrel hits with BoxheadComboAndPhysicsRegistry chain reaction & Blast-Surf Thrusters
                 barrels.forEachIndexed { bIdx, barrel ->
                     if (!barrel.isDetonated && barrel.roomIndex in state.unlockedRooms) {
                         val distToRay = pointToSegmentDistance(barrel.x, barrel.y, nx, ny, endX, endY)
                         if (distToRay <= 24f) {
                             anyPelletHit = true
-                            barrels[bIdx] = barrel.copy(isDetonated = true)
-                            triggerBarrelExplosion(barrel.x, barrel.y, zombies, particles, banners).also { (kills, pts) ->
-                                totalKills += kills
-                                points += pts
-                                comboCount += kills
-                                if (kills > 0) comboTimerMs = 4500L
+                            val barrelNodes = barrels.mapIndexedNotNull { idx, b ->
+                                if (b.roomIndex in state.unlockedRooms) {
+                                    BarrelNode(id = idx, x = b.x, y = b.y, detonated = b.isDetonated)
+                                } else null
+                            }
+                            val surfStacks = max(
+                                passiveRelics.countOf(PassiveRelicKind.BLAST_SURF_THRUSTERS),
+                                1 // Default Blast-Surf safety boots or explicit relic stacks
+                            )
+                            val chainRes = BoxheadComboAndPhysicsRegistry.resolveBarrelChainReaction(
+                                initialBarrelId = bIdx,
+                                barrels = barrelNodes,
+                                playerX = nx,
+                                playerY = ny,
+                                blastSurfBootsStacks = surfStacks
+                            )
+                            curVelX += chainRes.blastSurfImpulseVx * 0.35f
+                            curVelY += chainRes.blastSurfImpulseVy * 0.35f
+                            var chainKills = 0
+                            var chainPts = 0
+                            for (detIdx in chainRes.detonatedBarrelIds) {
+                                if (detIdx in barrels.indices && !barrels[detIdx].isDetonated) {
+                                    val db = barrels[detIdx]
+                                    barrels[detIdx] = db.copy(isDetonated = true)
+                                    val (kills, pts) = triggerBarrelExplosion(db.x, db.y, zombies, particles, banners)
+                                    chainKills += kills
+                                    chainPts += pts
+                                    surfaceDecals.add(
+                                        PersistentSurfaceDecal(
+                                            decalId = "scorch_${clockMs}_$detIdx",
+                                            worldX = db.x,
+                                            worldY = db.y,
+                                            radiusPx = 42f,
+                                            kind = SurfaceDecalKind.BARREL_SCORCH_CRATER,
+                                            colorArgb = 0xAA1B1F2A,
+                                            createdAtTick = clockMs
+                                        )
+                                    )
+                                }
+                            }
+                            if (chainKills > 0) {
+                                totalKills += chainKills
+                                points += chainPts
+                                comboCount += chainKills
+                                comboTimerMs = 4500L
+                                boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, chainKills).first
                             }
                         }
                     }
@@ -569,11 +658,21 @@ class BoxBoyGameEngine {
                         lanternRange = totalLanternRange,
                         coneHalfSpreadRad = totalConeSpread
                     )
-                    val finalHitDamage = if (targetIlluminated) {
+                    val scytheCritBonus = Ror2PassiveRelicSystem.computeCritChanceBonus(passiveRelics)
+                    val isScytheCrit = scytheCritBonus > 0f &&
+                        (((clockMs + z.id * 37L) % 100L) < (scytheCritBonus * 100f).toLong() || scytheCritBonus >= 0.05f)
+                    val isCritHit = targetIlluminated || isScytheCrit
+                    val crowbarMult = Ror2PassiveRelicSystem.computeCrowbarMultiplier(z.hp, z.maxHp, passiveRelics)
+                    val rawCritDamage = if (isCritHit) {
                         anyCritHit = true
-                        (baseShotDamage * modWeapon.illuminatedCritMultiplier).roundToInt()
+                        baseShotDamage * modWeapon.illuminatedCritMultiplier
                     } else {
-                        baseShotDamage
+                        baseShotDamage.toFloat()
+                    }
+                    val finalHitDamage = (rawCritDamage * crowbarMult).roundToInt().coerceAtLeast(1)
+
+                    if (isCritHit && passiveRelics.critHealAmount > 0) {
+                        hp = (hp + passiveRelics.critHealAmount).coerceAtMost(maxHp)
                     }
 
                     z.hp -= finalHitDamage
@@ -582,6 +681,47 @@ class BoxBoyGameEngine {
                         endX = z.x
                         endY = z.y
                     }
+
+                    // Relic: Ukulele Arc Lightning on-hit chain
+                    val ukuleleStacks = passiveRelics.countOf(PassiveRelicKind.UKULELE_ARC_LIGHTNING)
+                    if (ukuleleStacks > 0) {
+                        val arcDamage = (finalHitDamage * (0.40f + 0.15f * ukuleleStacks)).roundToInt().coerceAtLeast(8)
+                        val arcTargets = zombies
+                            .filter { it.id != z.id && it.hp > 0 && hypot(it.x - z.x, it.y - z.y) <= 195f }
+                            .take(passiveRelics.arcLightningTargets)
+                        for (arcZ in arcTargets) {
+                            arcZ.hp -= arcDamage
+                            tracers.add(
+                                BulletTracer(
+                                    startX = z.x,
+                                    startY = z.y,
+                                    endX = arcZ.x,
+                                    endY = arcZ.y,
+                                    colorHex = PassiveRelicKind.UKULELE_ARC_LIGHTNING.colorHex
+                                )
+                            )
+                        }
+                    }
+
+                    // Relic: AtG Plasma Missile Mk.1 on-hit homing strike
+                    val atgStacks = passiveRelics.countOf(PassiveRelicKind.ATG_PLASMA_MISSILE)
+                    if (atgStacks > 0) {
+                        val missileTarget = zombies
+                            .filter { it.hp > 0 && hypot(it.x - z.x, it.y - z.y) <= 420f }
+                            .maxByOrNull { it.hp } ?: z
+                        val missileDmg = (finalHitDamage * (0.75f + 0.45f * atgStacks)).roundToInt().coerceAtLeast(15)
+                        missileTarget.hp -= missileDmg
+                        tracers.add(
+                            BulletTracer(
+                                startX = nx,
+                                startY = ny,
+                                endX = missileTarget.x,
+                                endY = missileTarget.y,
+                                colorHex = PassiveRelicKind.ATG_PLASMA_MISSILE.colorHex
+                            )
+                        )
+                    }
+
                     if (weapon.isExplosive) {
                         triggerBarrelExplosion(z.x, z.y, zombies, particles, banners, radius = 95f, damage = finalHitDamage)
                     }
@@ -612,6 +752,7 @@ class BoxBoyGameEngine {
                     if (z.hp <= 0) {
                         comboCount++
                         comboTimerMs = 4500L
+                        boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, 1).first
                         val mult = (1 + comboCount / 5).coerceAtMost(8)
                         val earned = z.archetype.rewardPoints * mult
                         points += earned
@@ -620,12 +761,53 @@ class BoxBoyGameEngine {
                         if (state.armorRig.countForSet(ArmorSetArchetype.VOID_ALCHEMIST) >= 4) {
                             shield = (shield + 5).coerceAtMost(maxShield)
                         }
+                        surfaceDecals.add(
+                            PersistentSurfaceDecal(
+                                decalId = "ichor_${clockMs}_${z.id}",
+                                worldX = z.x,
+                                worldY = z.y,
+                                radiusPx = 18f,
+                                kind = SurfaceDecalKind.ZOMBIE_ICHOR_SPLATTER,
+                                colorArgb = 0x993A0CA3,
+                                createdAtTick = clockMs
+                            )
+                        )
+                        // Relic: Will-o'-the-Wisp Lava Pillar Detonation on kill
+                        val wispStacks = passiveRelics.countOf(PassiveRelicKind.WILL_O_WISP_JAR)
+                        if (wispStacks > 0) {
+                            val wispRadius = 95f + 22f * wispStacks
+                            val wispDmg = 45 + 30 * wispStacks
+                            for (otherZ in zombies) {
+                                if (otherZ.id != z.id && otherZ.hp > 0 && hypot(otherZ.x - z.x, otherZ.y - z.y) <= wispRadius) {
+                                    otherZ.hp -= wispDmg
+                                }
+                            }
+                            surfaceDecals.add(
+                                PersistentSurfaceDecal(
+                                    decalId = "wisp_${clockMs}_${z.id}",
+                                    worldX = z.x,
+                                    worldY = z.y,
+                                    radiusPx = 32f,
+                                    kind = SurfaceDecalKind.BARREL_SCORCH_CRATER,
+                                    colorArgb = 0xAAFF595E,
+                                    createdAtTick = clockMs
+                                )
+                            )
+                            banners.add(
+                                FloatingBanner(
+                                    text = "WISP PILLAR!",
+                                    x = z.x,
+                                    y = z.y - 36f,
+                                    colorHex = PassiveRelicKind.WILL_O_WISP_JAR.colorHex
+                                )
+                            )
+                        }
                         banners.add(
                             FloatingBanner(
-                                text = "+$earned ${if (targetIlluminated) "CRIT!" else ""}",
+                                text = "+$earned ${if (isCritHit) "CRIT!" else ""}",
                                 x = z.x,
                                 y = z.y - 14f,
-                                colorHex = if (targetIlluminated) 0xFF00E5FF else 0xFF00FF66
+                                colorHex = if (isCritHit) 0xFF00E5FF else 0xFF00FF66
                             )
                         )
                         // Phase 4 & 5: Roll procedural Modular Weapon or 7-Slot Armor drop
@@ -681,7 +863,7 @@ class BoxBoyGameEngine {
                 val armorReloadBoost = state.armorRig.totalReloadSpeedMultiplier
                 val totalReloadMs = (
                     (modWeapon.effectiveReloadMs * perkReloadFactor * tierStats.reloadTimeMultiplier) /
-                        (speedCfg.fireReloadMultiplier * armorReloadBoost).coerceAtLeast(0.25f)
+                        (speedCfg.fireReloadMultiplier * armorReloadBoost * relicAttackSpeedBoost).coerceAtLeast(0.25f)
                     ).toLong().coerceAtLeast(180L)
                 reloadRemainingMs = totalReloadMs
                 telemetry = telemetry.copy(currentReloadTotalMs = totalReloadMs)
@@ -691,14 +873,78 @@ class BoxBoyGameEngine {
             }
         }
 
-        // Remove any zombies killed by Cryo Mines, Puddles, or Auto-Turret Beacons
+        // Passive Relic Auras: Frost Relic Icicle & Tesla Coil Beacon
+        val frostStacks = passiveRelics.countOf(PassiveRelicKind.FROST_RELIC_ICICLE)
+        val teslaStacks = passiveRelics.countOf(PassiveRelicKind.TESLA_COIL_BEACON)
+        if ((frostStacks > 0 || teslaStacks > 0) && clockMs - lastRelicAuraTickMs >= 250L) {
+            lastRelicAuraTickMs = clockMs
+            if (frostStacks > 0) {
+                val frostRadius = 140f + 22f * frostStacks
+                val frostDmg = 8 + 6 * frostStacks
+                for (z in zombies) {
+                    if (z.hp > 0 && hypot(z.x - nx, z.y - ny) <= frostRadius) {
+                        z.hp -= frostDmg
+                    }
+                }
+            }
+            if (teslaStacks > 0) {
+                val teslaRadius = 195f + 20f * teslaStacks
+                val teslaDmg = 14 + 10 * teslaStacks
+                val zapped = zombies
+                    .filter { it.hp > 0 && hypot(it.x - nx, it.y - ny) <= teslaRadius }
+                    .take(2 + teslaStacks)
+                for (z in zapped) {
+                    z.hp -= teslaDmg
+                    tracers.add(
+                        BulletTracer(
+                            startX = nx,
+                            startY = ny,
+                            endX = z.x,
+                            endY = z.y,
+                            colorHex = PassiveRelicKind.TESLA_COIL_BEACON.colorHex
+                        )
+                    )
+                }
+            }
+        }
+
+        // Remove any zombies killed by Cryo Mines, Puddles, Auto-Turret Beacons, or Relic Auras
         val secondaryKills = zombies.filter { it.hp <= 0 }
         for (zk in secondaryKills) {
             totalKills++
             points += zk.archetype.rewardPoints
+            boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, 1).first
+            surfaceDecals.add(
+                PersistentSurfaceDecal(
+                    decalId = "ichor_${clockMs}_${zk.id}",
+                    worldX = zk.x,
+                    worldY = zk.y,
+                    radiusPx = 18f,
+                    kind = SurfaceDecalKind.ZOMBIE_ICHOR_SPLATTER,
+                    colorArgb = 0x993A0CA3,
+                    createdAtTick = clockMs
+                )
+            )
+            if (passiveRelics.countOf(PassiveRelicKind.WILL_O_WISP_JAR) > 0) {
+                surfaceDecals.add(
+                    PersistentSurfaceDecal(
+                        decalId = "wisp_${clockMs}_${zk.id}",
+                        worldX = zk.x,
+                        worldY = zk.y,
+                        radiusPx = 32f,
+                        kind = SurfaceDecalKind.BARREL_SCORCH_CRATER,
+                        colorArgb = 0xAAFF595E,
+                        createdAtTick = clockMs
+                    )
+                )
+            }
             maybeSpawnLootDrop(zk, state.wave, lootDrops, banners)
         }
         zombies.removeAll { it.hp <= 0 }
+
+        if (surfaceDecals.size > 128) {
+            surfaceDecals.subList(0, surfaceDecals.size - 128).clear()
+        }
 
         // 3. Phase 3 Contextual 1-Tap Fortification Placement (Barrel / Barricade Wall / Cryo Mine / Auto-Turret)
         var statusToast = state.statusToast
@@ -867,6 +1113,7 @@ class BoxBoyGameEngine {
             for (i in barrels.indices) {
                 barrels[i] = barrels[i].copy(isDetonated = false)
             }
+            vendingStock = SingleCurrencyVendingEngine.generateWaveVendingStock(wave, state.mapSeed)
             depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 25)
             statusToast = "WAVE $wave INCOMING -- Shield Recharged & +25 Abyssal Scrap!"
             banners.add(FloatingBanner("WAVE $wave!", nx, ny - 30f, 0xFFFFD166, ttlMs = 1500L))
@@ -899,6 +1146,7 @@ class BoxBoyGameEngine {
 
         val zBaseSpeed = (36f + wave * 2.4f).coerceAtMost(82f) * speedCfg.zombieSpeedMultiplier
         val zombieCount = zombies.size
+        HordeSteeringEngine.rebuildSpatialGrid(zombies)
         for (zi in 0 until zombieCount) {
             val z = zombies[zi]
             // Evaluate distance to player (if not downed) and all living squad members
@@ -1147,6 +1395,12 @@ class BoxBoyGameEngine {
                             points -= nearby.cost
                             unlockedRooms = unlockedRooms + nearby.targetRoomIndex
                             stations.removeAll { it.id == nearby.id }
+                            elonaWorldReceipt = ElonaSocketFrontierEngine.unlockFrontierDoorAndExpand(
+                                currentReceipt = elonaWorldReceipt,
+                                frontierId = "door_sector_${nearby.roomIndex}_to_${nearby.targetRoomIndex}",
+                                stateCache = state.worldStateCache
+                            )
+                            WorldChunkStreamer.invalidateChunks()
                             statusToast = "UNLOCKED ${mazeSyncedMap.rooms.getOrNull(nearby.targetRoomIndex)?.name ?: "NEW SECTOR"}!"
                             banners.add(FloatingBanner("SECTOR UNLOCKED!", nearby.x, nearby.y, 0xFFFFD166))
                         }
@@ -1191,11 +1445,22 @@ class BoxBoyGameEngine {
                     StationKind.PACK_A_PUNCH -> {
                         val curWpn = state.currentWeapon
                         val curLv = weaponLevels[curWpn.id] ?: 1
-                        if (points >= nearby.cost && curLv < 5) {
-                            points -= nearby.cost
+                        val tierUpgradeCost = if (curLv == 1 && nearby.cost in 1..1500) {
+                            nearby.cost
+                        } else {
+                            SingleCurrencyVendingEngine.computePackAPunchCost(curLv)
+                        }
+                        if (points >= tierUpgradeCost && curLv < 5) {
+                            points -= tierUpgradeCost
                             val nextLv = curLv + 1
                             weaponLevels = weaponLevels + (curWpn.id to nextLv)
                             magAmmo[curWpn.id] = state.currentMaxMagSize + 4
+                            val sIdx = stations.indexOfFirst { it.id == nearby.id }
+                            if (sIdx >= 0) {
+                                stations[sIdx] = stations[sIdx].copy(
+                                    cost = SingleCurrencyVendingEngine.computePackAPunchCost(nextLv)
+                                )
+                            }
                             statusToast = "PACK-A-PUNCHED ${curWpn.name} TO TIER $nextLv!"
                             banners.add(FloatingBanner("${curWpn.shortCode} MK-$nextLv!", nearby.x, nearby.y, 0xFFB388FF))
                         }
@@ -1337,9 +1602,13 @@ class BoxBoyGameEngine {
             playerReviveProgress = playerReviveProg,
             chunkSnapshot = chunkSnapshot,
             passiveRelics = passiveRelics,
+            elonaWorldReceipt = elonaWorldReceipt,
             clockMs = clockMs,
             isGameOver = isGameOver,
-            statusToast = statusToast
+            statusToast = statusToast,
+            surfaceDecals = surfaceDecals,
+            boxheadCombo = boxheadCombo,
+            vendingStock = vendingStock
         )
     }
 
@@ -1825,74 +2094,7 @@ class BoxBoyGameEngine {
     }
 
     private fun isWalkable(x: Float, y: Float, map: ProceduralMap, unlockedRooms: Set<Int>): Boolean {
-        val rooms = map.rooms
-        val roomCount = rooms.size
-        var inUnlockedArea = false
-        for (i in 0 until roomCount) {
-            val room = rooms[i]
-            val idx = room.index
-            if (idx !in unlockedRooms) continue
-            val b = room.bounds
-
-            // Allow seamless crossing across shared walls when the adjacent room is also unlocked
-            val openLeft = (idx == 1 && 0 in unlockedRooms) || (idx == 4 && 1 in unlockedRooms) ||
-                (idx == 3 && 2 in unlockedRooms) || (idx == 5 && 3 in unlockedRooms)
-            val openRight = (idx == 0 && 1 in unlockedRooms) || (idx == 1 && 4 in unlockedRooms) ||
-                (idx == 2 && 3 in unlockedRooms) || (idx == 3 && 5 in unlockedRooms)
-            val openTop = (idx == 0 && 2 in unlockedRooms) || (idx == 1 && 3 in unlockedRooms) ||
-                (idx == 4 && 5 in unlockedRooms)
-            val openBottom = (idx == 2 && 0 in unlockedRooms) || (idx == 3 && 1 in unlockedRooms) ||
-                (idx == 5 && 4 in unlockedRooms)
-
-            val minX = if (openLeft) b.left - 4f else b.left + 22f
-            val maxX = if (openRight) b.right + 4f else b.right - 22f
-            val minY = if (openTop) b.top - 4f else b.top + 22f
-            val maxY = if (openBottom) b.bottom + 4f else b.bottom - 22f
-
-            if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
-                inUnlockedArea = true
-                break
-            }
-        }
-        if (!inUnlockedArea) return false
-
-        // Collide with jagged perimeter rock/ruin outcroppings
-        val outcrops = map.jaggedPerimeterOutcrops
-        for (i in 0 until outcrops.size) {
-            val oc = outcrops[i].bounds
-            if (x >= oc.left - 6f && x <= oc.right + 6f && y >= oc.top - 6f && y <= oc.bottom + 6f) {
-                return false
-            }
-        }
-
-        val obstacles = map.wallObstacles
-        for (i in 0 until obstacles.size) {
-            val p = obstacles[i]
-            if (x >= p.left - 12f && x <= p.right + 12f && y >= p.top - 12f && y <= p.bottom + 12f) {
-                return false
-            }
-        }
-
-        // Deep lake water blocks walking unless crossing the lake's wooden plank footbridge
-        val lakes = map.lakes
-        for (i in 0 until lakes.size) {
-            val lake = lakes[i]
-            val rx = (lake.radiusX * 0.85f).coerceAtLeast(10f)
-            val ry = (lake.radiusY * 0.85f).coerceAtLeast(10f)
-            val nxLake = (x - lake.x) / rx
-            val nyLake = (y - lake.y) / ry
-            if (nxLake * nxLake + nyLake * nyLake < 1.0f) {
-                val onFootbridge = if (lake.bridgeHorizontal) {
-                    abs(y - lake.y) <= 28f
-                } else {
-                    abs(x - lake.x) <= 28f
-                }
-                if (!onFootbridge) {
-                    return false
-                }
-            }
-        }
-        return true
+        return WorldChunkStreamer.isWalkableInChunkedWorld(x, y, map, unlockedRooms)
     }
 
     private fun pointToSegmentDistance(px: Float, py: Float, x1: Float, y1: Float, x2: Float, y2: Float): Float {

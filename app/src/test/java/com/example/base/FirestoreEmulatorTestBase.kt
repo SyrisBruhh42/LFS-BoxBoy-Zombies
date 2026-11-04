@@ -15,6 +15,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -33,18 +34,24 @@ abstract class FirestoreEmulatorTestBase {
     @Before
     open fun setUpFirebase() {
         org.junit.Assume.assumeTrue(
+            "Skip Robolectric Maven download in constrained cloud VMs",
+            System.getenv("JULES_CLOUD_SKIP_ROBOLECTRIC") != "1"
+        )
+        org.junit.Assume.assumeTrue(
             "Skipping FirestoreEmulatorTestBase: local Firebase Emulator not listening on $EMULATOR_HOST:$AUTH_PORT",
             isEmulatorPortOpen(EMULATOR_HOST, AUTH_PORT) && isEmulatorPortOpen(EMULATOR_HOST, FIRESTORE_PORT)
         )
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val resId = context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
-        databaseId = if (resId != 0) context.getString(resId) else "demo-database"
+        assertTrue(context.packageName == "com.example" || context.packageName == "com.lewisfamilysystems.boxboyzombies")
+        databaseId = runCatching { context.getString(com.example.R.string.firestore_database_id) }
+            .getOrDefault("demo-database")
+            .ifBlank { "demo-database" }
 
         val app = if (FirebaseApp.getApps(context).isEmpty()) {
             val newApp = FirebaseApp.initializeApp(
                 context,
                 FirebaseOptions.Builder()
-                    .setApplicationId("com.aistudio.boxboyzombies.rtxkmq")
+                    .setApplicationId("com.lewisfamilysystems.boxboyzombies")
                     .setProjectId(PROJECT_ID)
                     .setApiKey("fake-api-key-for-emulator")
                     .build()

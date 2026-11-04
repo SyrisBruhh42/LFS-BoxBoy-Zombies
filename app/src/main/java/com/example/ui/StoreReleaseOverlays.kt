@@ -1004,6 +1004,9 @@ fun StoreSettingsPrivacyAndAccountDialog(
 
 @Composable
 fun PrivacyDataSafetyCardContent() {
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    var showInlinePrivacyFallback by remember { mutableStateOf(false) }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
         modifier = Modifier
@@ -1046,6 +1049,61 @@ fun PrivacyDataSafetyCardContent() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MysteryGold
             )
+
+            OutlinedButton(
+                onClick = {
+                    try {
+                        uriHandler.openUri("https://lewisfamilysystems.com/privacy")
+                    } catch (_: Exception) {
+                        showInlinePrivacyFallback = true
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, CryoCyan, RoundedCornerShape(8.dp))
+                    .testTag("privacy_policy_external_link_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = "Privacy Policy & Data Deletion",
+                    tint = CryoCyan,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Privacy Policy & Data Deletion (https://lewisfamilysystems.com/privacy)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CryoCyan,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            if (showInlinePrivacyFallback) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = HandheldChassis),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MysteryGold, RoundedCornerShape(8.dp))
+                        .testTag("privacy_policy_inline_fallback_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "OFFLINE PRIVACY & DATA DELETION SUMMARY (https://lewisfamilysystems.com/privacy)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MysteryGold,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "No external browser was detected on this device. All BoxBoy Zombies data can be permanently deleted at any time using the 'DELETE ACCOUNT & PURGE CLOUD/LOCAL DATA' control in Settings, or via https://lewisfamilysystems.com/privacy.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextCrisp
+                        )
+                    }
+                }
+            }
         }
     }
 }

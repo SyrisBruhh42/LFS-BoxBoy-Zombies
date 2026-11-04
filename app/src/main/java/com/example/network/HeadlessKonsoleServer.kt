@@ -17,7 +17,7 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
-import java.net.InetSocketAddress
+import java.net.InetAddress
 import java.net.ServerSocket
 import kotlin.math.roundToInt
 
@@ -32,14 +32,15 @@ const val KONSOLE_TCP_PORT = 48900
  */
 class HeadlessKonsoleServer(
     private val scope: CoroutineScope,
-    private val commandDispatcher: (String) -> String
+    private val commandDispatcher: (String) -> String,
+    private val port: Int = KONSOLE_TCP_PORT
 ) {
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
 
     private val _konsoleLog = MutableStateFlow(
         listOf(
-            "BOXBOY KONSOLE DAEMON v2.6 READY ON TCP PORT $KONSOLE_TCP_PORT",
+            "BOXBOY KONSOLE DAEMON v2.6 READY ON LOOPBACK TCP PORT $KONSOLE_TCP_PORT",
             "Linux/Terminal Connect: adb forward tcp:$KONSOLE_TCP_PORT tcp:$KONSOLE_TCP_PORT && nc 127.0.0.1 $KONSOLE_TCP_PORT",
             "Type HELP, MAP, STATE, JSON, STRESS 150 300, SPAWN 30 DEVIL_BOSS, or BOT ON."
         )
@@ -50,9 +51,8 @@ class HeadlessKonsoleServer(
         if (serverJob?.isActive == true) return
         serverJob = scope.launch(Dispatchers.IO) {
             try {
-                val srv = ServerSocket()
+                val srv = ServerSocket(port, 8, InetAddress.getLoopbackAddress())
                 srv.reuseAddress = true
-                srv.bind(InetSocketAddress("0.0.0.0", KONSOLE_TCP_PORT))
                 serverSocket = srv
                 while (isActive) {
                     val client = srv.accept()

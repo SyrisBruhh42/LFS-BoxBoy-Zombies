@@ -14,24 +14,36 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.boxboyzombies.rtxkmq"
+    applicationId = "com.lewisfamilysystems.boxboyzombies"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 12
+    versionName = "2.0.0-playstore"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
+
+  val releaseKeystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+  val hasReleaseSigningKeystore =
+    (file("my-upload-key.jks").exists() || file(releaseKeystorePath).exists()) &&
+      (!System.getenv("KEYSTORE_PASSWORD").isNullOrBlank() || !System.getenv("STORE_PASSWORD").isNullOrBlank())
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
   // and updating Android apps in AI Studio.
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      if (hasReleaseSigningKeystore) {
+        val resolvedStore = if (file(releaseKeystorePath).exists()) file(releaseKeystorePath) else file("my-upload-key.jks")
+        storeFile = resolvedStore
+        storePassword = System.getenv("STORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
+        keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+      } else {
+        storeFile = file("${rootDir}/debug.keystore")
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -44,11 +56,15 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      // Fall back to debug signing when local release keystore/env vars are absent.
+      signingConfig = if (hasReleaseSigningKeystore) {
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.findByName("debugConfig") ?: signingConfigs.getByName("debug")
+      }
     }
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
@@ -63,6 +79,11 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = false
+    }
   }
   testOptions {
     unitTests {
@@ -132,7 +153,7 @@ dependencies {
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
   implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
@@ -146,6 +167,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation("org.json:json:20240303")
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)

@@ -65,9 +65,32 @@ object WorldChunkStreamer {
     private val chunkCache = ConcurrentHashMap<ChunkCoord, WorldChunkSlice>()
     private var indexedMapSeed: Long = Long.MIN_VALUE
     private var indexedWallHash: Int = 0
+    private var lastWallObstaclesRef: List<Rect>? = null
+
+    // Memoization state for 60/120Hz queryAndStreamSquadChunks
+    private var lastSquadChunkCoords: Set<ChunkCoord> = emptySet()
+    private var lastPlayerCoord: ChunkCoord = ChunkCoord(-1, -1)
+    private var lastFocalPeerCount: Int = -1
+    private var lastTopologyRevision: Long = Long.MIN_VALUE
+    private var cachedSnapshot: ChunkStreamSnapshot? = null
+    private var manualInvalidationCounter: Long = 0L
+    private var memoizationHitCount: Long = 0L
+    private var rebuildCount: Long = 0L
 
     private val _snapshotFlow = MutableStateFlow(ChunkStreamSnapshot())
     val snapshotFlow: StateFlow<ChunkStreamSnapshot> = _snapshotFlow.asStateFlow()
+
+    /**
+     * Explicitly invalidates the memoized chunk snapshot when maze pillars shift,
+     * doors unlock, or fortifications/props mutate chunk geometry.
+     */
+    fun invalidateChunks() {
+        manualInvalidationCounter++
+        cachedSnapshot = null
+    }
+
+    fun getMemoizationHitCountForTest(): Long = memoizationHitCount
+    fun getRebuildCountForTest(): Long = rebuildCount
 
     fun worldToChunkCoord(x: Float, y: Float): ChunkCoord {
         val cx = (x / CHUNK_SIZE_PX).toInt().coerceIn(0, WORLD_COLS - 1)
@@ -81,9 +104,21 @@ object WorldChunkStreamer {
         return Rect(left, top, left + CHUNK_SIZE_PX, top + CHUNK_SIZE_PX)
     }
 
+    private fun computeTopologyRevision(map: ProceduralMap): Long {
+        ensureMapIndexed(map)
+        var rev = map.seed
+        rev = rev * 31L + indexedWallHash
+        rev = rev * 31L + map.townBuildings.size
+        rev = rev * 31L + map.stations.size
+        rev = rev * 31L + map.barrels.size
+        rev = rev * 31L + manualInvalidationCounter
+        return rev
+    }
+
     /**
      * Synchronously returns the current active chunks around the squad (for deterministic unit tests
-     * and immediate first-frame rendering) while triggering async background pre-warming for adjacent chunks.
+     * and immediate first-frame rendering) while triggering async background pre-warming for adjacent chunks
+     * ONLY when squad chunk coordinates or world topology change.
      */
     fun queryAndStreamSquadChunks(
         map: ProceduralMap,
@@ -92,18 +127,42 @@ object WorldChunkStreamer {
         coopPeers: List<CoopPeerState> = emptyList(),
         nowMs: Long = System.currentTimeMillis()
     ): ChunkStreamSnapshot {
-        ensureMapIndexed(map)
-
-        val focalCoords = LinkedHashSet<ChunkCoord>()
+        val topologyRev = computeTopologyRevision(map)
         val playerCoord = worldToChunkCoord(playerX, playerY)
+
+        // Fast zero-allocation memoization check for solo play
+        if (coopPeers.isEmpty() &&
+            lastFocalPeerCount == 0 &&
+            playerCoord == lastPlayerCoord &&
+            topologyRev == lastTopologyRevision
+        ) {
+            cachedSnapshot?.let {
+                memoizationHitCount++
+                return it
+            }
+        }
+
+        val focalCoords = LinkedHashSet<ChunkCoord>(4)
         focalCoords.add(playerCoord)
+        var activePeers = 0
         for (i in 0 until coopPeers.size) {
             val peer = coopPeers[i]
             if (peer.hp > 0 || peer.isDowned) {
                 focalCoords.add(worldToChunkCoord(peer.x, peer.y))
+                activePeers++
             }
         }
 
+        if (topologyRev == lastTopologyRevision &&
+            focalCoords == lastSquadChunkCoords
+        ) {
+            cachedSnapshot?.let {
+                memoizationHitCount++
+                return it
+            }
+        }
+
+        rebuildCount++
         val activeList = ArrayList<WorldChunkSlice>(16)
         val midLodList = ArrayList<WorldChunkSlice>(24)
 
@@ -141,9 +200,14 @@ object WorldChunkStreamer {
             totalChunksInWorld = WORLD_COLS * WORLD_ROWS,
             playerChunk = playerCoord
         )
+        lastPlayerCoord = playerCoord
+        lastFocalPeerCount = activePeers
+        lastSquadChunkCoords = focalCoords
+        lastTopologyRevision = topologyRev
+        cachedSnapshot = snapshot
         _snapshotFlow.value = snapshot
 
-        // Pre-warm neighbor ring asynchronously on background dispatcher
+        // Pre-warm neighbor ring asynchronously on background dispatcher only when chunk set or topology changes
         streamerScope.launch {
             for (focal in focalCoords) {
                 for (dy in -2..2) {
@@ -164,12 +228,17 @@ object WorldChunkStreamer {
     }
 
     private fun ensureMapIndexed(map: ProceduralMap) {
+        if (map.seed == indexedMapSeed && map.wallObstacles === lastWallObstaclesRef) {
+            return
+        }
         val wallHash = map.wallObstacles.hashCode()
         if (map.seed != indexedMapSeed || wallHash != indexedWallHash) {
             chunkCache.clear()
+            cachedSnapshot = null
             indexedMapSeed = map.seed
             indexedWallHash = wallHash
         }
+        lastWallObstaclesRef = map.wallObstacles
     }
 
     private fun getOrBuildChunkSlice(

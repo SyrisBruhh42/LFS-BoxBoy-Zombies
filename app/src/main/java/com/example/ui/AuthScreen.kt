@@ -51,11 +51,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -65,6 +69,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.isFirebaseInitialized
 import com.example.ui.theme.CryoCyan
 import com.example.ui.theme.HandheldChassis
 import com.example.ui.theme.HandheldObsidian
@@ -82,6 +87,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+private const val PRIVACY_POLICY_URL = "https://lewisfamilysystems.com/privacy"
+
 fun attemptAutoSignIn(
     context: Context,
     credentialManager: CredentialManager,
@@ -89,13 +96,21 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
-    if (Firebase.auth.currentUser != null) {
+    if (!isFirebaseInitialized(context)) {
+        onUnauthenticated()
+        return
+    }
+    if (runCatching { Firebase.auth.currentUser }.getOrNull() != null) {
         onAuthSuccess()
         return
     }
     val clientId = try {
         context.getString(R.string.default_web_client_id)
     } catch (e: Exception) {
+        onUnauthenticated()
+        return
+    }
+    if (clientId.isBlank() || clientId == "VAULT_INJECTED_AT_RUNTIME") {
         onUnauthenticated()
         return
     }
@@ -140,6 +155,12 @@ fun onGoogleSignInClicked(
         onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
         return
     }
+    if (clientId.isBlank() || clientId == "VAULT_INJECTED_AT_RUNTIME" || !isFirebaseInitialized(context)) {
+        onAuthError(
+            "Cloud OAuth client ID is not configured in this build. Continue in Sovereign Offline / LAN Co-Op Mode for 100% local play."
+        )
+        return
+    }
 
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
     val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
@@ -172,7 +193,9 @@ fun signOut(
     onSignOutComplete: () -> Unit,
     scope: CoroutineScope
 ) {
-    Firebase.auth.signOut()
+    if (isFirebaseInitialized(context)) {
+        runCatching { Firebase.auth.signOut() }
+    }
     scope.launch {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
@@ -190,20 +213,31 @@ fun AuthScreen(
     onPlayOfflineClicked: () -> Unit
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
+    val offlineButtonFocusRequester = remember { FocusRequester() }
+    val defaultWebClientId = stringResource(R.string.default_web_client_id)
+    val isOAuthUnconfigured = defaultWebClientId.isBlank() ||
+        defaultWebClientId == "VAULT_INJECTED_AT_RUNTIME" ||
+        !isFirebaseInitialized(context)
+
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showPrivacyModal by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            onAuthSuccess = onAuthSuccess,
-            onUnauthenticated = {},
-            scope = scope
-        )
+    LaunchedEffect(isOAuthUnconfigured) {
+        if (isOAuthUnconfigured) {
+            runCatching { offlineButtonFocusRequester.requestFocus() }
+        } else {
+            attemptAutoSignIn(
+                context = context,
+                credentialManager = credentialManager,
+                onAuthSuccess = onAuthSuccess,
+                onUnauthenticated = {},
+                scope = scope
+            )
+        }
     }
 
     Surface(
@@ -299,12 +333,30 @@ fun AuthScreen(
                     )
                 }
 
+                if (isOAuthUnconfigured) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = CryoCyan.copy(alpha = 0.14f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, CryoCyan, RoundedCornerShape(10.dp))
+                            .testTag("oauth_unconfigured_info_banner")
+                    ) {
+                        Text(
+                            text = "Sovereign Offline-First Build: Cloud OAuth is optional and unconfigured in this environment. Tap below to play immediately with local AES-256-GCM saves, AI companions, and LAN/USB Co-Op.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CryoCyan,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+
                 // Primary Action: Instant 100% Offline Play (No Sign-In Required)
                 Button(
                     onClick = onPlayOfflineClicked,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp)
+                        .height(62.dp)
+                        .focusRequester(offlineButtonFocusRequester)
                         .testTag("play_offline_button"),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -314,18 +366,18 @@ fun AuthScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Play Offline Now",
+                        contentDescription = "Continue in Sovereign Offline / LAN Co-Op Mode",
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(horizontalAlignment = Alignment.Start) {
                         Text(
-                            text = "PLAY 100% OFFLINE NOW",
+                            text = "Continue in Sovereign Offline / LAN Co-Op Mode",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Instant launch | No account required | Local AES-GCM saves & LAN/USB Co-op",
+                            text = "PLAY 100% OFFLINE NOW | No account required | Local AES-GCM saves & LAN/USB Co-op",
                             style = MaterialTheme.typography.labelSmall,
                             color = HandheldObsidian.copy(alpha = 0.85f)
                         )
@@ -352,23 +404,29 @@ fun AuthScreen(
                 OutlinedButton(
                     onClick = {
                         errorMessage = null
-                        isLoading = true
-                        onGoogleSignInClicked(
-                            context = context,
-                            credentialManager = credentialManager,
-                            onAuthSuccess = {
-                                isLoading = false
-                                onAuthSuccess()
-                            },
-                            onAuthError = { err ->
-                                isLoading = false
-                                errorMessage = err
-                            },
-                            scope = scope,
-                            onAuthCancelled = {
-                                isLoading = false
-                            }
-                        )
+                        if (isOAuthUnconfigured) {
+                            errorMessage =
+                                "Cloud OAuth is not configured on this device. Please tap 'Continue in Sovereign Offline / LAN Co-Op Mode'."
+                            runCatching { offlineButtonFocusRequester.requestFocus() }
+                        } else {
+                            isLoading = true
+                            onGoogleSignInClicked(
+                                context = context,
+                                credentialManager = credentialManager,
+                                onAuthSuccess = {
+                                    isLoading = false
+                                    onAuthSuccess()
+                                },
+                                onAuthError = { err ->
+                                    isLoading = false
+                                    errorMessage = err
+                                },
+                                scope = scope,
+                                onAuthCancelled = {
+                                    isLoading = false
+                                }
+                            )
+                        }
                     },
                     enabled = !isLoading,
                     modifier = Modifier
@@ -400,27 +458,53 @@ fun AuthScreen(
                     }
                 }
 
-                // Play Store Compliance: Privacy Policy & Data Safety Inspector
-                OutlinedButton(
-                    onClick = { showPrivacyModal = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(42.dp)
-                        .testTag("auth_privacy_policy_button"),
-                    shape = RoundedCornerShape(10.dp)
+                // Play Store Compliance: Privacy Policy & Data Deletion Link + Modal Fallback
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = "Privacy & Data Safety",
-                        tint = PhosphorGreen,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Privacy Policy & Data Safety Inspector (Zero Ad Tracking)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = PhosphorGreen
-                    )
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                uriHandler.openUri(PRIVACY_POLICY_URL)
+                            } catch (_: Exception) {
+                                showPrivacyModal = true
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("auth_privacy_policy_url_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Privacy Policy & Data Deletion",
+                            tint = PhosphorGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Privacy Policy & Data Deletion",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = PhosphorGreen
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPrivacyModal = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .testTag("auth_privacy_policy_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = "Data Safety Inspector",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = CryoCyan
+                        )
+                    }
                 }
             }
 

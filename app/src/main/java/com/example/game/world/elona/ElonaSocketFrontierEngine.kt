@@ -437,6 +437,7 @@ object ElonaSocketFrontierEngine {
         catalog: List<SectionComponentDef> = DEFAULT_COMPONENT_CATALOG
     ): AssembledSectionReceipt {
         val targetFrontier = currentReceipt.frontierSockets.find { it.frontierId == frontierId }
+            ?: currentReceipt.frontierSockets.firstOrNull()
             ?: return currentReceipt
         val activeCatalog = catalog.ifEmpty { DEFAULT_COMPONENT_CATALOG }
         val stepSeed = currentReceipt.seed xor (targetFrontier.targetGridX * 73856093L) xor (targetFrontier.targetGridY * 19349663L)
@@ -475,11 +476,17 @@ object ElonaSocketFrontierEngine {
 
         val updatedNodes = occupied.values.toList()
         val updatedFrontier = frontierMap.values.toList()
+        val rootDef = activeCatalog.first()
+        val vendingCount = updatedNodes.count { node ->
+            val def = activeCatalog.find { it.componentId == node.componentId } ?: rootDef
+            def.rows.any { row -> row.contains('V') }
+        }.coerceAtLeast(1)
         return currentReceipt.copy(
             topologyHash = computeTopologyHash(currentReceipt.seed, updatedNodes, updatedFrontier),
             placedNodes = updatedNodes,
             frontierSockets = updatedFrontier,
             shortcutGates = resolveShortcutLoops(updatedNodes),
+            reachableVendingCount = vendingCount,
             solvable = verifyTopologicalReachability(updatedNodes)
         )
     }

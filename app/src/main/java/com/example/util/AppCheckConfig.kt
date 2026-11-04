@@ -4,9 +4,10 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.BuildConfig
+import com.example.R
 import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.AppCheckProviderFactory
 import com.google.firebase.appcheck.FirebaseAppCheck
-import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
 
 private const val TAG = "AppCheckInit"
@@ -14,12 +15,16 @@ private const val TAG = "AppCheckInit"
 private const val DEBUG_TOKEN_EXTRA = "FIREBASE_APPCHECK_DEBUG_TOKEN"
 private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store."
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
-private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
+private const val DEBUG_PROVIDER_CLASS = "com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory"
 
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
         if (FirebaseApp.getApps(context).isEmpty()) {
             FirebaseApp.initializeApp(context)
+        }
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            Log.i(TAG, "FirebaseApp not configured (Sovereign Offline Mode); skipping App Check.")
+            return
         }
 
         if (BuildConfig.DEBUG) {
@@ -41,24 +46,24 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 Log.w(TAG, "No debug token found in Intent extra.")
             }
 
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            val debugFactory = runCatching {
+                val clazz = Class.forName(DEBUG_PROVIDER_CLASS)
+                clazz.getMethod("getInstance").invoke(null) as? AppCheckProviderFactory
+            }.getOrNull()
+
+            if (debugFactory != null) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(debugFactory)
+                Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            }
         } else {
-            val resId = context.resources.getIdentifier(RECAPTCHA_SITE_KEY_RES, "string", context.packageName)
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
-                } else {
-                    Log.e(TAG, "recaptcha_site_key resource string is blank.")
-                }
+            val siteKey = runCatching { context.getString(R.string.recaptcha_site_key) }.getOrDefault("")
+            if (siteKey.isNotBlank() && siteKey != "VAULT_INJECTED_AT_RUNTIME") {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                )
+                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
             } else {
-                Log.e(TAG, "recaptcha_site_key string resource not found in package.")
+                Log.w(TAG, "recaptcha_site_key resource string is blank or unconfigured.")
             }
         }
     } catch (e: Exception) {

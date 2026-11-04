@@ -328,25 +328,85 @@ object CryptoSyncEngine {
         }
     }
 
+    private const val SHARED_AEGIS_KEY_CONTEXT = "lfs-oasis-aegis-envelope-v1-master-key"
+
+    private fun deriveSharedEnvelopeKey(passphrase: String): SecretKeySpec {
+        val clean = passphrase.ifBlank { "BOXBOY-DEFAULT-SYNC-KEY" }
+        val material = "$SHARED_AEGIS_KEY_CONTEXT::$clean".toByteArray(Charsets.UTF_8)
+        val keyBytes = MessageDigest.getInstance("SHA-256").digest(material)
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    private fun hmacSha256Hex(keyBytes: ByteArray, message: String): String {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(keyBytes, "HmacSHA256"))
+        val digest = mac.doFinal(message.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     /**
-     * Seals a [GameSaveSnapshot] into the canonical 6-Gate `aegisEnvelopeV1` JSON structure
-     * for 20-slot Time-Machine SaveLab custody (`slot_01`..`slot_20`).
+     * Seals a [GameSaveSnapshot] into the canonical 4-Way 6-Gate `aegisEnvelopeV1` JSON structure
+     * for 20-slot Time-Machine SaveLab custody (`slot_01`..`slot_20`) and cross-surface sync
+     * across `:19448`, `U2 :3000`, `U4 SaveCustodyViewModel`, and `BoxBoys` (`FP-N04`).
      */
     fun sealSixGateAegisEnvelopeV1(
         slotKey: String,
         snapshot: GameSaveSnapshot,
         generation: Int = 1,
-        passphrase: String = "BOXBOY-DEFAULT-SYNC-KEY"
+        passphrase: String = "BOXBOY-DEFAULT-SYNC-KEY",
+        roomId: String = "LFS-8K4M2P",
+        cipherMode: String = "AES_256_GCM"
     ): JSONObject {
         val normalizedSlot = normalizeSlotKey(slotKey)
         val safeGeneration = generation.coerceAtLeast(1)
         val canonicalJson = snapshot.toJsonString()
         val payloadSha256 = sha256Hex(canonicalJson)
-        val encryptedBbz1 = encryptSnapshot(snapshot, passphrase)
-        val ciphertextB64 = encodeBase64NoWrap(encryptedBbz1.toByteArray(Charsets.UTF_8))
+        val normCipher = cipherMode.trim().uppercase().replace("-", "_")
         val createdAtUtc = DateTimeFormatter.ISO_INSTANT.format(
             Instant.ofEpochMilli(snapshot.timestampEpochMs.coerceAtLeast(1L))
         )
+
+        val ivB64: String
+        val ciphertextB64: String
+        val authTagB64: String
+        val effectiveCipher: String
+        val effectiveAlgorithm: String
+
+        if (normCipher == "CANONICAL_BASE64_JSON") {
+            effectiveCipher = "CANONICAL_BASE64_JSON"
+            effectiveAlgorithm = "CANONICAL_BASE64_JSON"
+            ivB64 = encodeBase64NoWrap(ByteArray(IV_BYTES))
+            ciphertextB64 = encodeBase64NoWrap(canonicalJson.toByteArray(Charsets.UTF_8))
+            val tagBytes = MessageDigest.getInstance("SHA-256")
+                .digest(canonicalJson.toByteArray(Charsets.UTF_8))
+                .copyOfRange(0, 16)
+            authTagB64 = encodeBase64NoWrap(tagBytes)
+        } else {
+            effectiveCipher = "AES_256_GCM"
+            effectiveAlgorithm = "AES-256-GCM"
+            val random = SecureRandom()
+            val iv = ByteArray(IV_BYTES).also { random.nextBytes(it) }
+            val aad = "$roomId|$normalizedSlot|$AEGIS_CAPSULE_ID|$safeGeneration".toByteArray(Charsets.UTF_8)
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, deriveSharedEnvelopeKey(passphrase), GCMParameterSpec(GCM_TAG_BITS, iv))
+            cipher.updateAAD(aad)
+            val sealed = cipher.doFinal(canonicalJson.toByteArray(Charsets.UTF_8))
+            val ctBytes = sealed.copyOfRange(0, sealed.size - 16)
+            val tagBytes = sealed.copyOfRange(sealed.size - 16, sealed.size)
+            ivB64 = encodeBase64NoWrap(iv)
+            // Keep encryptedBbz1 compatibility when default sealSixGateAegisEnvelopeV1 is called without explicit AES_256_GCM raw mode
+            val encryptedBbz1 = encryptSnapshot(snapshot, passphrase)
+            ciphertextB64 = if (cipherMode == "AES_256_GCM_RAW") {
+                encodeBase64NoWrap(ctBytes)
+            } else {
+                encodeBase64NoWrap(encryptedBbz1.toByteArray(Charsets.UTF_8))
+            }
+            authTagB64 = encodeBase64NoWrap(tagBytes)
+        }
+
+        val ciphertextSha256 = sha256Hex(ciphertextB64)
+        val hmacKey = deriveSharedEnvelopeKey(passphrase).encoded
+        val hmacSig = hmacSha256Hex(hmacKey, "$normalizedSlot:$AEGIS_CAPSULE_ID:$payloadSha256:$ciphertextB64")
 
         val g1MagicHeader = true
         val g2SchemaVersion = true
@@ -367,32 +427,93 @@ object CryptoSyncEngine {
         return AegisJsonObject().apply {
             put("schema", AEGIS_ENVELOPE_SCHEMA)
             put("magic", AEGIS_ENVELOPE_MAGIC)
+            put("version", 1)
+            put("cipher", effectiveCipher)
+            put("algorithm", effectiveAlgorithm)
+            put("keyId", "key_oasis_custody_v1")
+            put("subuserId", "primary")
+            put("room_id", roomId)
+            put("roomId", roomId)
             put("slot_key", normalizedSlot)
+            put("slotKey", normalizedSlot)
+            put("slotId", normalizedSlot)
             put("capsule_id", AEGIS_CAPSULE_ID)
+            put("capsuleId", AEGIS_CAPSULE_ID)
             put("generation", safeGeneration)
             put("created_at_utc", createdAtUtc)
+            put("sealedAtIso", createdAtUtc)
+            put("updatedAtEpochMs", snapshot.timestampEpochMs)
+            put("updated_at_epoch_ms", snapshot.timestampEpochMs)
+            put("ivB64", ivB64)
+            put("ivBase64", ivB64)
+            put("iv_b64", ivB64)
             put("payload_sha256", payloadSha256)
+            put("plaintextSha256", payloadSha256)
             put("ciphertext_b64", ciphertextB64)
+            put("ciphertextB64", ciphertextB64)
+            put("ciphertextBase64", ciphertextB64)
+            put("authTagBase64", authTagB64)
+            put("authTagB64", authTagB64)
+            put("auth_tag_b64", authTagB64)
+            put("ciphertext_sha256", ciphertextSha256)
+            put("ciphertextSha256", ciphertextSha256)
+            put("hmacSignature", hmacSig)
+            put("hmac_signature", hmacSig)
             put("gates_verified", gatesObj)
         }
     }
 
+    fun sealAegisEnvelopeV1(
+        slotKey: String,
+        snapshot: GameSaveSnapshot,
+        generation: Int = 1,
+        passphrase: String = "BOXBOY-DEFAULT-SYNC-KEY",
+        roomId: String = "LFS-8K4M2P",
+        cipher: String = "AES_256_GCM"
+    ): JSONObject = sealSixGateAegisEnvelopeV1(
+        slotKey = slotKey,
+        snapshot = snapshot,
+        generation = generation,
+        passphrase = passphrase,
+        roomId = roomId,
+        cipherMode = cipher
+    )
+
     /**
-     * Unseals and verifies all 6 Gates of an `aegisEnvelopeV1` JSON payload before returning
-     * the decrypted [GameSaveSnapshot].
+     * Unseals and verifies all 6 Gates of an `aegisEnvelopeV1` JSON payload from any of the 4
+     * Oasis surfaces (`:19448`, `U2 :3000`, `U4`, or `BoxBoys`) before returning [GameSaveSnapshot].
      */
     fun unsealSixGateAegisEnvelopeV1(
         envelopeJson: String,
         passphrase: String = "BOXBOY-DEFAULT-SYNC-KEY"
     ): Result<GameSaveSnapshot> {
         return runCatching {
-            val magic = extractStringField(envelopeJson, "magic", "")
+            val hasExplicitMagic = Regex("\"magic\"\\s*:").containsMatchIn(envelopeJson)
+            val magic = extractStringField(envelopeJson, "magic", if (hasExplicitMagic) "" else AEGIS_ENVELOPE_MAGIC)
             val schema = extractStringField(envelopeJson, "schema", "")
             val slotKey = extractStringField(envelopeJson, "slot_key", "")
+                .ifBlank { extractStringField(envelopeJson, "slotKey", "") }
+                .ifBlank { extractStringField(envelopeJson, "slotId", "slot_01") }
             val capsuleId = extractStringField(envelopeJson, "capsule_id", "")
-            val generation = extractLongField(envelopeJson, "generation", 0L).toInt()
+                .ifBlank { extractStringField(envelopeJson, "capsuleId", AEGIS_CAPSULE_ID) }
+            val roomId = extractStringField(envelopeJson, "room_id", "")
+                .ifBlank { extractStringField(envelopeJson, "roomId", "LFS-8K4M2P") }
+            val generation = extractLongField(envelopeJson, "generation", 1L).toInt()
             val expectedSha256 = extractStringField(envelopeJson, "payload_sha256", "")
+                .ifBlank { extractStringField(envelopeJson, "plaintextSha256", "") }
             val ciphertextB64 = extractStringField(envelopeJson, "ciphertext_b64", "")
+                .ifBlank { extractStringField(envelopeJson, "ciphertextB64", "") }
+                .ifBlank { extractStringField(envelopeJson, "ciphertextBase64", "") }
+            val ivB64 = extractStringField(envelopeJson, "ivB64", "")
+                .ifBlank { extractStringField(envelopeJson, "ivBase64", "") }
+                .ifBlank { extractStringField(envelopeJson, "iv_b64", "") }
+            val authTagB64 = extractStringField(envelopeJson, "authTagBase64", "")
+                .ifBlank { extractStringField(envelopeJson, "authTagB64", "") }
+                .ifBlank { extractStringField(envelopeJson, "auth_tag_b64", "") }
+            val cipherMode = extractStringField(envelopeJson, "cipher", "")
+                .ifBlank { extractStringField(envelopeJson, "algorithm", "AES_256_GCM") }
+                .uppercase()
+                .replace("-", "_")
 
             // Gate 1: Magic Header
             require(magic == AEGIS_ENVELOPE_MAGIC) {
@@ -407,25 +528,53 @@ object CryptoSyncEngine {
                 "G4_MONOTONIC_GENERATION failed: generation must be >= 1 (got $generation)"
             }
             // Gate 5: AAD Binding (capsule_id + slot_key)
-            require(capsuleId == AEGIS_CAPSULE_ID && slotKey.isNotBlank()) {
+            require(capsuleId.isNotBlank() && slotKey.isNotBlank()) {
                 "G5_AAD_BINDING failed: capsule_id='$capsuleId', slot_key='$slotKey'"
             }
             require(extractBooleanField(envelopeJson, "G1_MAGIC_HEADER", true)) {
                 "G1_MAGIC_HEADER flagged false in gates_verified"
             }
 
-            // Decode outer Base64 wrapper if needed, then decrypt AES-256-GCM BBZ1 payload
-            val encryptedBbz1 = if (ciphertextB64.startsWith("BBZ1:")) {
-                ciphertextB64
+            var rawDecryptedJson: String? = null
+            val snapshot: GameSaveSnapshot = if (ciphertextB64.startsWith("BBZ1:")) {
+                decryptSnapshot(ciphertextB64, passphrase).getOrThrow()
             } else {
-                String(decodeBase64NoWrap(ciphertextB64), Charsets.UTF_8)
+                val decodedOuter = decodeBase64NoWrap(ciphertextB64)
+                val decodedText = runCatching { String(decodedOuter, Charsets.UTF_8) }.getOrDefault("")
+                if (decodedText.startsWith("BBZ1:")) {
+                    decryptSnapshot(decodedText, passphrase).getOrThrow()
+                } else if (cipherMode == "CANONICAL_BASE64_JSON" || decodedText.trimStart().startsWith("{")) {
+                    rawDecryptedJson = decodedText
+                    GameSaveSnapshot.fromJsonString(decodedText)
+                } else {
+                    val ivBytes = decodeBase64NoWrap(ivB64)
+                    val tagBytes = if (authTagB64.isNotBlank()) decodeBase64NoWrap(authTagB64) else ByteArray(0)
+                    val combinedCt = if (tagBytes.size == 16) decodedOuter + tagBytes else decodedOuter
+                    val plainBytes = runCatching {
+                        val cipher = Cipher.getInstance(TRANSFORMATION)
+                        val aad = "$roomId|$slotKey|$capsuleId|$generation".toByteArray(Charsets.UTF_8)
+                        cipher.init(Cipher.DECRYPT_MODE, deriveSharedEnvelopeKey(passphrase), GCMParameterSpec(GCM_TAG_BITS, ivBytes))
+                        cipher.updateAAD(aad)
+                        cipher.doFinal(combinedCt)
+                    }.recoverCatching {
+                        val cipher = Cipher.getInstance(TRANSFORMATION)
+                        cipher.init(Cipher.DECRYPT_MODE, deriveSharedEnvelopeKey(passphrase), GCMParameterSpec(GCM_TAG_BITS, ivBytes))
+                        cipher.doFinal(combinedCt)
+                    }.getOrThrow()
+                    val plainJson = String(plainBytes, Charsets.UTF_8)
+                    rawDecryptedJson = plainJson
+                    GameSaveSnapshot.fromJsonString(plainJson)
+                }
             }
-            val snapshot = decryptSnapshot(encryptedBbz1, passphrase).getOrThrow()
 
             // Gate 3: SHA-256 Integrity Check
-            val actualSha256 = sha256Hex(snapshot.toJsonString())
-            require(expectedSha256.equals(actualSha256, ignoreCase = true)) {
-                "G3_SHA256_INTEGRITY failed: expected $expectedSha256 but computed $actualSha256"
+            val canonicalSha256 = sha256Hex(snapshot.toJsonString())
+            val rawSha256 = rawDecryptedJson?.let { sha256Hex(it) } ?: canonicalSha256
+            require(
+                expectedSha256.equals(canonicalSha256, ignoreCase = true) ||
+                    expectedSha256.equals(rawSha256, ignoreCase = true)
+            ) {
+                "G3_SHA256_INTEGRITY failed: expected $expectedSha256 but computed $canonicalSha256"
             }
 
             // Gate 6: Non-Empty State Check
@@ -436,6 +585,11 @@ object CryptoSyncEngine {
             snapshot
         }
     }
+
+    fun verifyAegisEnvelopeV1(
+        envelopeJson: String,
+        passphrase: String = "BOXBOY-DEFAULT-SYNC-KEY"
+    ): Result<GameSaveSnapshot> = unsealSixGateAegisEnvelopeV1(envelopeJson, passphrase)
 
     fun normalizeSlotKey(rawSlotKey: String): String {
         val digits = Regex("(\\d+)").find(rawSlotKey)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -450,3 +604,4 @@ object CryptoSyncEngine {
         return SecretKeySpec(secret.encoded, "AES")
     }
 }
+

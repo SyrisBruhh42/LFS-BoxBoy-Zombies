@@ -166,7 +166,7 @@ sealed interface AiDirectorUiState {
 }
 
 class BoxBoyViewModel(
-    private val repository: BoxBoyRepository,
+    private val repository: BoxBoyRepository? = null,
     private val localPrefs: SharedPreferences,
     val currentUserId: String,
     val isCloudAuthenticated: Boolean
@@ -329,7 +329,7 @@ class BoxBoyViewModel(
     // Strict Auth-Gated Cloud Flows: In 100% Offline Mode (isCloudAuthenticated == false),
     // never attach Firestore listeners so offline play works with zero account requirement.
     val cloudSaveSlots: StateFlow<UiState<List<SaveSlot>>> = (
-        if (isCloudAuthenticated) {
+        if (isCloudAuthenticated && repository != null) {
             repository.observeSaveSlots()
                 .map<List<SaveSlot>, UiState<List<SaveSlot>>> { UiState.Success(it) }
                 .catch { err ->
@@ -342,11 +342,11 @@ class BoxBoyViewModel(
         ).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = if (isCloudAuthenticated) UiState.Loading else UiState.Success(emptyList())
+        initialValue = if (isCloudAuthenticated && repository != null) UiState.Loading else UiState.Success(emptyList())
     )
 
     val cloudControllerProfiles: StateFlow<UiState<List<ControllerProfile>>> = (
-        if (isCloudAuthenticated) {
+        if (isCloudAuthenticated && repository != null) {
             repository.observeControllerProfiles()
                 .map<List<ControllerProfile>, UiState<List<ControllerProfile>>> { UiState.Success(it) }
                 .catch { err ->
@@ -359,7 +359,7 @@ class BoxBoyViewModel(
         ).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = if (isCloudAuthenticated) UiState.Loading else UiState.Success(emptyList())
+        initialValue = if (isCloudAuthenticated && repository != null) UiState.Loading else UiState.Success(emptyList())
     )
 
     private val directiveSchema = Schema.obj(
@@ -391,6 +391,19 @@ class BoxBoyViewModel(
     }
 
     private var frameSyncCounter = 0
+    private var isAppInForeground = true
+    private var wasStorytellerPlayingBeforeBackground = false
+
+    internal fun isFirebaseInitialized(context: Context? = null): Boolean {
+        return runCatching {
+            val apps = if (context != null) {
+                com.google.firebase.FirebaseApp.getApps(context)
+            } else {
+                com.google.firebase.FirebaseApp.getApps(com.google.firebase.FirebaseApp.getInstance().applicationContext)
+            }
+            apps.isNotEmpty()
+        }.getOrDefault(false)
+    }
 
     init {
         loadOfflineSlotsFromPrefs()
@@ -398,7 +411,9 @@ class BoxBoyViewModel(
         loadStoreSettingsAndCareerFromPrefs()
         loadTrashArcadeRelicsFromPrefs()
         loadZt9ComfortOverridesFromPrefs()
-        konsoleServer.startServer()
+        if (com.example.BuildConfig.DEBUG && _storeSettings.value.developerModeEnabled) {
+            konsoleServer.startServer()
+        }
         oasisServerClient.triggerTailscaleAnchorHandshakeAsync(
             isTailscaleInterfaceDetected = networkHealth.value.isTailscaleActive || networkHealth.value.isPrivateNetworkDetected
         )
@@ -423,6 +438,33 @@ class BoxBoyViewModel(
                 )
             }
         }
+    }
+
+    fun onAppForeground() {
+        isAppInForeground = true
+        networkHealthService.startPeriodicHealthCheck()
+        networkHealthService.refreshNetworkHealth()
+        if (wasStorytellerPlayingBeforeBackground && !storytellerController.state.value.isPlaying) {
+            wasStorytellerPlayingBeforeBackground = false
+            storytellerController.togglePlayPause(
+                config = oasisEndpointConfig.value,
+                hearthKeyNodeId = oasisStatus.value.tailscaleHandshake.stableNodeId
+            )
+        }
+        if (com.example.BuildConfig.DEBUG && _storeSettings.value.developerModeEnabled) {
+            konsoleServer.startServer()
+        }
+    }
+
+    fun onAppBackground() {
+        isAppInForeground = false
+        _gameState.value = _gameState.value.copy(isPaused = true)
+        konsoleServer.stopServer()
+        wasStorytellerPlayingBeforeBackground = storytellerController.state.value.isPlaying
+        if (wasStorytellerPlayingBeforeBackground) {
+            storytellerController.pausePlayback()
+        }
+        networkHealthService.startPeriodicHealthCheck(Long.MAX_VALUE)
     }
 
     // --- 60 FPS GAME LOOP TICK ---
@@ -1184,7 +1226,7 @@ class BoxBoyViewModel(
         )
 
         viewModelScope.launch {
-            if (isCloudAuthenticated) {
+            if (isCloudAuthenticated && repository != null) {
                 repository.createOrUpdateCloudRoom(
                     roomCode = cleanCode,
                     hostName = "Survivor-${currentUserId.take(4).ifBlank { "01" }}",
@@ -1207,7 +1249,7 @@ class BoxBoyViewModel(
     fun migrateActiveRoomHostMode(targetMode: LfsHostMode) {
         oasisServerClient.migrateHostMode(targetMode) { updatedDesc ->
             viewModelScope.launch {
-                if (isCloudAuthenticated) {
+                if (isCloudAuthenticated && repository != null) {
                     repository.createOrUpdateCloudRoom(
                         roomCode = updatedDesc.roomCode,
                         hostName = "Survivor-${currentUserId.take(4).ifBlank { "01" }}",
@@ -1271,7 +1313,7 @@ class BoxBoyViewModel(
                 encryptedPayload = encrypted,
                 loadoutSummary = loadoutSummary
             )
-            if (isCloudAuthenticated) {
+            if (isCloudAuthenticated && repository != null) {
                 repository.createSaveSlot(
                     slotName = snap.slotName,
                     highestWave = snap.highestWave,
@@ -1407,9 +1449,10 @@ class BoxBoyViewModel(
     }
 
     fun deleteCloudSaveSlot(slotId: String) {
+        val repo = repository ?: return
         if (!isCloudAuthenticated) return
         viewModelScope.launch {
-            repository.deleteSaveSlot(slotId)
+            repo.deleteSaveSlot(slotId)
         }
     }
 
@@ -1534,9 +1577,10 @@ class BoxBoyViewModel(
         val cfg = _controllerConfig.value.copy(profileName = profileName.ifBlank { "MyBoy Custom" })
         _controllerConfig.value = cfg
         localPrefs.edit().putString("local_controller_code", cfg.toKeyMapCode()).apply()
-        if (isCloudAuthenticated) {
+        val repo = repository
+        if (isCloudAuthenticated && repo != null) {
             viewModelScope.launch {
-                repository.createControllerProfile(
+                repo.createControllerProfile(
                     profileName = cfg.profileName,
                     dpadScale = cfg.dpadScalePercent,
                     buttonOpacity = cfg.buttonOpacityPercent,
@@ -1583,9 +1627,10 @@ class BoxBoyViewModel(
     }
 
     fun deleteCloudControllerProfile(profileId: String) {
+        val repo = repository ?: return
         if (!isCloudAuthenticated) return
         viewModelScope.launch {
-            repository.deleteControllerProfile(profileId)
+            repo.deleteControllerProfile(profileId)
         }
     }
 
@@ -1611,7 +1656,7 @@ class BoxBoyViewModel(
 
     fun generateProceduralDirective(userThemePrompt: String) {
         val st = _gameState.value
-        if (_preferOfflineAiEngine.value) {
+        if (_preferOfflineAiEngine.value || !isFirebaseInitialized()) {
             val offlineDirective = OfflineTacticalAiEngine.synthesizeOfflineDirective(userThemePrompt, st)
             _aiState.value = AiDirectorUiState.DirectiveReady(offlineDirective)
             return
@@ -1681,7 +1726,7 @@ class BoxBoyViewModel(
 
     fun streamFastRadioAdvice() {
         val st = _gameState.value
-        if (_preferOfflineAiEngine.value) {
+        if (_preferOfflineAiEngine.value || !isFirebaseInitialized()) {
             val offlineAdvice = OfflineTacticalAiEngine.generateOfflineRadioCallout(st)
             _aiState.value = AiDirectorUiState.AdviceReady(offlineAdvice)
             return
@@ -2158,6 +2203,11 @@ class BoxBoyViewModel(
             .putBoolean("store_dev_mode_v1", updated.developerModeEnabled)
             .putBoolean("store_seen_manual_v1", updated.hasSeenFieldManual)
             .apply()
+        if (com.example.BuildConfig.DEBUG && updated.developerModeEnabled && isAppInForeground) {
+            konsoleServer.startServer()
+        } else {
+            konsoleServer.stopServer()
+        }
     }
 
     fun markFieldManualCompleted() {
@@ -2168,8 +2218,9 @@ class BoxBoyViewModel(
         viewModelScope.launch {
             _accountDeletionStatus.value = "Purging encrypted local saves & cloud Firestore records..."
             var cloudDeleted = 0
-            if (isCloudAuthenticated) {
-                repository.deleteAllUserCloudData().onSuccess { count ->
+            val repo = repository
+            if (isCloudAuthenticated && repo != null) {
+                repo.deleteAllUserCloudData().onSuccess { count ->
                     cloudDeleted = count
                 }
             }
@@ -2179,12 +2230,12 @@ class BoxBoyViewModel(
             _careerDossier.value = CareerDossier()
             _dailyDirectives.value = buildDailyDirectivesForDate(LocalDate.now(ZoneOffset.UTC).toString())
 
-            if (isCloudAuthenticated) {
+            if (isCloudAuthenticated && isFirebaseInitialized()) {
                 try {
                     Firebase.auth.currentUser?.delete()?.await()
                 } catch (e: Exception) {
                     Log.w(TAG, "Firebase user delete requires recent re-auth; signing out after cloud data purge", e)
-                    Firebase.auth.signOut()
+                    runCatching { Firebase.auth.signOut() }
                 }
             }
             _accountDeletionStatus.value = "Account & $cloudDeleted cloud records + all local saves permanently deleted."

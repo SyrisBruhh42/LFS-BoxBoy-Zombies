@@ -387,6 +387,7 @@ object MazeDirector {
                 pillars = activePillars,
                 seed = map.seed
             )
+            WorldChunkStreamer.invalidateChunks()
             map.copy(
                 wallObstacles = activePillars,
                 townBuildings = syncedTownBuildings

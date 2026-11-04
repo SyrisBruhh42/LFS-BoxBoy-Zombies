@@ -14,6 +14,18 @@ import kotlin.math.sin
  */
 object HordeSteeringEngine {
 
+    const val SPATIAL_CELL_SIZE = 160f
+    const val GRID_COLS = 32
+    const val GRID_ROWS = 20
+    private const val TOTAL_CELLS = GRID_COLS * GRID_ROWS
+
+    val DEFAULT_WEIGHTS = SteeringWeights()
+
+    // Pre-allocated uniform spatial hash grid to avoid 60/120Hz GC churn and O(N^2) scans
+    private val cellHead = IntArray(TOTAL_CELLS) { -1 }
+    private var nextInCell = IntArray(512) { -1 }
+    private var indexedZombieCount = 0
+
     data class SteeringWeights(
         val separationWeight: Float = 0.55f,
         val alignmentWeight: Float = 0.22f,
@@ -34,7 +46,29 @@ object HordeSteeringEngine {
     )
 
     /**
-     * Computes the blended steering direction for a zombie within a horde flock.
+     * Rebuilds the uniform spatial grid in O(N) time with zero heap allocations.
+     * Call once per simulation tick before stepping the zombie horde.
+     */
+    fun rebuildSpatialGrid(zombies: List<ZombieEntity>) {
+        val count = zombies.size
+        if (count > nextInCell.size) {
+            nextInCell = IntArray((count * 2).coerceAtLeast(512)) { -1 }
+        }
+        java.util.Arrays.fill(cellHead, -1)
+        for (i in 0 until count) {
+            val z = zombies[i]
+            val cx = (z.x / SPATIAL_CELL_SIZE).toInt().coerceIn(0, GRID_COLS - 1)
+            val cy = (z.y / SPATIAL_CELL_SIZE).toInt().coerceIn(0, GRID_ROWS - 1)
+            val cellIdx = cy * GRID_COLS + cx
+            nextInCell[i] = cellHead[cellIdx]
+            cellHead[cellIdx] = i
+        }
+        indexedZombieCount = count
+    }
+
+    /**
+     * Computes the blended steering direction for a zombie within a horde flock
+     * using the 3x3 uniform spatial grid neighborhood.
      */
     fun computeHordeSteering(
         zombieIndex: Int,
@@ -43,13 +77,16 @@ object HordeSteeringEngine {
         targetY: Float,
         flowVx: Float,
         flowVy: Float,
-        weights: SteeringWeights = SteeringWeights(),
+        weights: SteeringWeights = DEFAULT_WEIGHTS,
         flockNeighborRadius: Float = 140f
     ): SteeringResult {
+        if (indexedZombieCount != zombies.size || zombieIndex == 0) {
+            rebuildSpatialGrid(zombies)
+        }
         val self = zombies[zombieIndex]
         val distToTarget = hypot(targetX - self.x, targetY - self.y).coerceAtLeast(0.001f)
 
-        // 1. Separation, Alignment, Cohesion & Leader identification
+        // 1. Separation, Alignment, Cohesion & Leader identification via 3x3 spatial cell lookup
         var sepX = 0f
         var sepY = 0f
         var alignX = 0f
@@ -64,40 +101,58 @@ object HordeSteeringEngine {
         var minLeaderDist = Float.MAX_VALUE
 
         val minSepDist = self.archetype.radius * 2.3f
+        val maxSearchRadius = kotlin.math.max(flockNeighborRadius, minSepDist)
+        val cellRadius = kotlin.math.ceil(maxSearchRadius / SPATIAL_CELL_SIZE).toInt().coerceAtLeast(1)
 
-        for (i in zombies.indices) {
-            if (i == zombieIndex) continue
-            val other = zombies[i]
-            val dx = self.x - other.x
-            val dy = self.y - other.y
-            val d = hypot(dx, dy)
+        val selfCx = (self.x / SPATIAL_CELL_SIZE).toInt().coerceIn(0, GRID_COLS - 1)
+        val selfCy = (self.y / SPATIAL_CELL_SIZE).toInt().coerceIn(0, GRID_ROWS - 1)
+        val minCy = (selfCy - cellRadius).coerceAtLeast(0)
+        val maxCy = (selfCy + cellRadius).coerceAtMost(GRID_ROWS - 1)
+        val minCx = (selfCx - cellRadius).coerceAtLeast(0)
+        val maxCx = (selfCx + cellRadius).coerceAtMost(GRID_COLS - 1)
+        val totalZombies = zombies.size
 
-            // Separation (close range repulsion)
-            if (d in 0.05f..minSepDist) {
-                val push = (minSepDist - d) / minSepDist
-                sepX += (dx / d) * push
-                sepY += (dy / d) * push
-            }
+        for (cy in minCy..maxCy) {
+            val rowOffset = cy * GRID_COLS
+            for (cx in minCx..maxCx) {
+                var i = cellHead[rowOffset + cx]
+                while (i != -1) {
+                    if (i != zombieIndex && i < totalZombies) {
+                        val other = zombies[i]
+                        val dx = self.x - other.x
+                        val dy = self.y - other.y
+                        val d = hypot(dx, dy)
 
-            // Flocking neighborhood (Alignment & Cohesion)
-            if (d in 0.1f..flockNeighborRadius) {
-                neighborCount++
-                cohCenterX += other.x
-                cohCenterY += other.y
+                        // Separation (close range repulsion)
+                        if (d in 0.05f..minSepDist) {
+                            val push = (minSepDist - d) / minSepDist
+                            sepX += (dx / d) * push
+                            sepY += (dy / d) * push
+                        }
 
-                // Approximate other's heading vector from its position relative to target
-                val otDist = hypot(targetX - other.x, targetY - other.y).coerceAtLeast(0.001f)
-                alignX += (targetX - other.x) / otDist
-                alignY += (targetY - other.y) / otDist
+                        // Flocking neighborhood (Alignment & Cohesion)
+                        if (d in 0.1f..flockNeighborRadius) {
+                            neighborCount++
+                            cohCenterX += other.x
+                            cohCenterY += other.y
 
-                // Boss / High-tier leader following (Devils or Calicified Stalkers)
-                if (other.archetype == ZombieArchetype.DEVIL_BOSS || other.archetype == ZombieArchetype.CALCIFIED_STALKER) {
-                    if (d < minLeaderDist) {
-                        minLeaderDist = d
-                        leaderX = other.x
-                        leaderY = other.y
-                        leaderFound = true
+                            // Approximate other's heading vector from its position relative to target
+                            val otDist = hypot(targetX - other.x, targetY - other.y).coerceAtLeast(0.001f)
+                            alignX += (targetX - other.x) / otDist
+                            alignY += (targetY - other.y) / otDist
+
+                            // Boss / High-tier leader following (Devils or Calcified Stalkers)
+                            if (other.archetype == ZombieArchetype.DEVIL_BOSS || other.archetype == ZombieArchetype.CALCIFIED_STALKER) {
+                                if (d < minLeaderDist) {
+                                    minLeaderDist = d
+                                    leaderX = other.x
+                                    leaderY = other.y
+                                    leaderFound = true
+                                }
+                            }
+                        }
                     }
+                    i = nextInCell[i]
                 }
             }
         }
@@ -164,7 +219,7 @@ object HordeSteeringEngine {
 
         // 4. Combined steering blend
         val targetWeight = if (distToTarget < 360f) weights.targetSeekWeight * 1.35f else weights.targetSeekWeight
-        var combinedX = (flowVx * weights.flowFieldWeight) +
+        val combinedX = (flowVx * weights.flowFieldWeight) +
             (dirX * targetWeight) +
             (sepNormX * weights.separationWeight) +
             (alignNormX * weights.alignmentWeight) +
@@ -172,7 +227,7 @@ object HordeSteeringEngine {
             (flankVecX * weights.flankingWeight) +
             (leaderVecX * weights.leaderFollowWeight)
 
-        var combinedY = (flowVy * weights.flowFieldWeight) +
+        val combinedY = (flowVy * weights.flowFieldWeight) +
             (dirY * targetWeight) +
             (sepNormY * weights.separationWeight) +
             (alignNormY * weights.alignmentWeight) +

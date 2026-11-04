@@ -1,10 +1,12 @@
 package com.example.data
 
+import androidx.annotation.Keep
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.ServerTimestamp
 
+@Keep
 @IgnoreExtraProperties
 data class SaveSlot(
     @DocumentId val id: String = "",
@@ -20,6 +22,7 @@ data class SaveSlot(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Keep
 @IgnoreExtraProperties
 data class ControllerProfile(
     @DocumentId val id: String = "",
@@ -32,6 +35,7 @@ data class ControllerProfile(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Keep
 data class WeaponSpec(
     val id: String,
     val name: String,
@@ -218,6 +222,7 @@ enum class OasisBotPersona(
     MOTE("mote", "@mote", "High-Precision Rail/Crit Scout", 0xFF00E5FF, "railgun")
 }
 
+@Keep
 data class LfsServerEndpointConfig(
     val primaryEdgeHost: String = "https://play.lewisfamilysystems.com",
     val syncRelayWsUrl: String = "wss://play.lewisfamilysystems.com/ws",
@@ -231,6 +236,7 @@ data class LfsServerEndpointConfig(
     val expectedTailnetDomain: String = "tail420c4d.ts.net"
 )
 
+@Keep
 data class HostedRoomDescriptor(
     val roomId: String = "LFS-8K4M2P",
     val roomCode: String = "LFS-8K4M2P",
@@ -259,6 +265,7 @@ typealias HostedRoomSession = HostedRoomDescriptor
 typealias HostedRoomSummary = HostedRoomDescriptor
 
 
+@Keep
 @IgnoreExtraProperties
 data class CloudMultiplayerRoom(
     @DocumentId val id: String = "",
@@ -285,6 +292,7 @@ data class CloudMultiplayerRoom(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Keep
 @IgnoreExtraProperties
 data class CloudRoomPeer(
     @DocumentId val id: String = "",
@@ -326,6 +334,7 @@ enum class DailyDirectiveMetric {
     UPGRADE_OR_FORGE
 }
 
+@Keep
 data class DailyDirective(
     val id: String,
     val dateKey: String,
@@ -345,6 +354,7 @@ data class DailyDirective(
         get() = if (targetCount <= 0) 1f else (currentProgress.toFloat() / targetCount.toFloat()).coerceIn(0f, 1f)
 }
 
+@Keep
 data class CareerDossier(
     val highestWave: Int = 1,
     val totalKills: Int = 0,
@@ -365,6 +375,7 @@ data class CareerDossier(
         }
 }
 
+@Keep
 data class AppStoreSettingsState(
     val sfxEnabled: Boolean = true,
     val sfxVolume: Float = 0.85f,
@@ -376,6 +387,7 @@ data class AppStoreSettingsState(
 
 // --- TRASHARCADE LAUNCHER DEEP-LINK & CROSS-GAME ASSET BRIDGE (lfs-local-abac-v1) ---
 
+@Keep
 data class TrashArcadeLaunchParams(
     val oasisRoomCode: String? = null,
     val oasisHostMode: String? = null,
@@ -430,6 +442,7 @@ enum class TrashArcadeSharedRelic(
 
 // --- DISNEY IMAGINEERING ENGAGEMENT TRANSLATOR (GRADE <= 8.0) & ZT-9 COMFORT OVERRIDES ---
 
+@Keep
 data class Zt9ComfortOverridesState(
     val familyFriendlyArcadeMode: Boolean = true,
     val autoEnforceForChildRings: Boolean = true,
@@ -449,6 +462,7 @@ data class Zt9ComfortOverridesState(
         }
 }
 
+@Keep
 data class FriendlyGuideCardState(
     val id: String = "guide_ready",
     val title: String = "Friendly Guide Card",
@@ -529,6 +543,7 @@ enum class OasisWingDestination(
     val displayTitle: String get() = displayName
 }
 
+@Keep
 data class RmblynChatMessage(
     val id: String,
     val channelId: String = "arcade-lounge",
@@ -538,6 +553,7 @@ data class RmblynChatMessage(
     val isCompanionBot: Boolean = false
 )
 
+@Keep
 data class OpenAudibleChapterTrack(
     val key: String = "cb64f9e7",
     val bookTitle: String = "Chronicles of the Starlight Citadel",
@@ -547,6 +563,7 @@ data class OpenAudibleChapterTrack(
     val streamPath: String = "/api/lfs/openaudible/stream/cb64f9e7"
 )
 
+@Keep
 data class SanctuaryStorytellerState(
     val isPlaying: Boolean = false,
     val activeTrackKey: String = "cb64f9e7",

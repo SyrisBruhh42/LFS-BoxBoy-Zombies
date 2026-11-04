@@ -1,5 +1,7 @@
 package com.example.network
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.util.Log
 import com.example.data.CryptoSyncEngine
 import com.example.data.SyncTransportMode
@@ -25,10 +27,26 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "LocalP2pSocket"
 const val DEFAULT_P2P_TCP_PORT = 48899
 const val DEFAULT_P2P_UDP_PORT = 48898
+const val MAX_REMOTE_PEERS = 3
+
+enum class LocalP2pRole {
+    IDLE,
+    HOST,
+    CLIENT
+}
+
+data class PeerConnection(
+    val peerId: String,
+    val peerAddress: String,
+    val socket: Socket,
+    val writer: PrintWriter,
+    val connectedAtMs: Long = System.currentTimeMillis()
+)
 
 /**
  * Structured message envelope passed between peers over [ServerSocket] and [Socket].
@@ -81,6 +99,7 @@ data class P2pSessionStatus(
     val transportMode: SyncTransportMode = SyncTransportMode.LFS_HOSTED_SERVER,
     val localIpAddress: String = "127.0.0.1",
     val connectedPeerAddress: String = "",
+    val connectedPeerCount: Int = 0,
     val discoveredPeers: List<String> = emptyList(),
     val messageHistory: List<P2pNetworkMessage> = emptyList(),
     val packetsSent: Int = 0,
@@ -90,39 +109,72 @@ data class P2pSessionStatus(
 )
 
 /**
- * Peer-to-Peer Connectivity Module using [java.net.ServerSocket], [java.net.Socket],
- * and [java.net.DatagramSocket] for:
- * 1. Local network multiplayer discovery (UDP LAN broadcast beacons + passive scanner).
- * 2. Low-latency bidirectional TCP message passing (co-op player telemetry, tactical radio pings,
- *    wave events, and AES-256-GCM encrypted save capsules).
+ * 4-Player Star-Mesh Peer-to-Peer Connectivity Module (`FP-N05`) using [java.net.ServerSocket],
+ * [java.net.Socket], and [java.net.DatagramSocket] for:
+ * 1. Multi-subnet UDP LAN broadcast beacons (`InterfaceAddress.broadcast` + `255.255.255.255`)
+ *    and `WifiManager.MulticastLock` acquisition.
+ * 2. Up to [MAX_REMOTE_PEERS] (`3` remote peers = `4` players total) concurrent TCP connections
+ *    with automatic host-side packet relay (`TACTICAL_CALLOUT`, `SQUAD_REVIVE_PULSE`, `WAVE_SYNC`, `COOP_STATE`).
  */
 class LocalP2pSocketManager(
     private val scope: CoroutineScope,
     private val onRemoteSaveReceived: (CryptoSyncEngine.GameSaveSnapshot) -> Unit,
-    private val onTacticalMessageReceived: (P2pNetworkMessage) -> Unit = {}
+    private val onTacticalMessageReceived: (P2pNetworkMessage) -> Unit = {},
+    private val appContext: Context? = null
 ) {
-    private val _sessionStatus = MutableStateFlow(P2pSessionStatus(localIpAddress = resolveLocalIpv4()))
+    private val _sessionStatus = MutableStateFlow(P2pSessionStatus(localIpAddress = resolveLocalLanIp()))
     val sessionStatus: StateFlow<P2pSessionStatus> = _sessionStatus.asStateFlow()
 
     private val _coopPeerState = MutableStateFlow<CoopPeerState?>(null)
     val coopPeerState: StateFlow<CoopPeerState?> = _coopPeerState.asStateFlow()
 
+    private val _remotePeerStates = MutableStateFlow<Map<String, CoopPeerState>>(emptyMap())
+    val remotePeerStates: StateFlow<Map<String, CoopPeerState>> = _remotePeerStates.asStateFlow()
+
+    val peerSockets = ConcurrentHashMap<String, PeerConnection>()
+
+    @Volatile
+    var role: LocalP2pRole = LocalP2pRole.IDLE
+        private set
+
     private var serverSocket: ServerSocket? = null
-    private var activeSocket: Socket? = null
-    private var socketWriter: PrintWriter? = null
     private var serverJob: Job? = null
     private var discoveryJob: Job? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     init {
         startPassiveLanDiscoveryScanner()
     }
 
+    fun acquireMulticastLock(context: Context? = appContext) {
+        val ctx = context ?: return
+        runCatching {
+            val wifiManager = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            if (multicastLock == null) {
+                multicastLock = wifiManager.createMulticastLock("BoxBoysLanDiscoveryLock").apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (multicastLock?.isHeld == false) {
+                multicastLock?.acquire()
+            }
+        }
+    }
+
+    fun releaseMulticastLock() {
+        runCatching {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+            }
+        }
+    }
+
     fun refreshLocalIp() {
-        _sessionStatus.value = _sessionStatus.value.copy(localIpAddress = resolveLocalIpv4())
+        _sessionStatus.value = _sessionStatus.value.copy(localIpAddress = resolveLocalLanIp())
     }
 
     fun setTransportMode(mode: SyncTransportMode) {
-        val ip = if (mode == SyncTransportMode.USB_ADB) "127.0.0.1" else resolveLocalIpv4()
+        val ip = if (mode == SyncTransportMode.USB_ADB) "127.0.0.1" else resolveLocalLanIp()
         _sessionStatus.value = _sessionStatus.value.copy(
             transportMode = mode,
             localIpAddress = ip,
@@ -130,7 +182,7 @@ class LocalP2pSocketManager(
                 SyncTransportMode.LFS_HOSTED_SERVER -> "LFS Dedicated Server (U1/U2) ready via play.lewisfamilysystems.com"
                 SyncTransportMode.LFS_LOCAL_HOST_TUNNEL -> "Host on Device + LFS Tunnel ready via sync.lewisfamilysystems.com"
                 SyncTransportMode.FIRESTORE_CLOUD_RELAY -> "Firestore Live Room Relay ready (6-char room code)"
-                SyncTransportMode.LAN_WIFI -> "LAN Mode active ($ip:$DEFAULT_P2P_TCP_PORT)"
+                SyncTransportMode.LAN_WIFI -> "LAN Mode active ($ip:$DEFAULT_P2P_TCP_PORT, up to 4 players)"
                 SyncTransportMode.USB_ADB -> "USB Tunnel ready (adb forward tcp:$DEFAULT_P2P_TCP_PORT tcp:$DEFAULT_P2P_TCP_PORT)"
                 SyncTransportMode.BLUETOOTH_P2P -> "P2P Encrypted Capsule & Direct Socket mode ready"
             }
@@ -138,12 +190,13 @@ class LocalP2pSocketManager(
     }
 
     /**
-     * Listens for UDP LAN discovery beacons on [DEFAULT_P2P_UDP_PORT] so joining devices
-     * automatically see active hosts on the same Wi-Fi or Hotspot without typing an IP.
+     * Listens for UDP LAN discovery beacons on [DEFAULT_P2P_UDP_PORT] and broadcasts to all active
+     * subnet broadcast addresses (`InterfaceAddress.broadcast`) in addition to `255.255.255.255`.
      */
     fun startPassiveLanDiscoveryScanner() {
         if (discoveryJob?.isActive == true) return
-        val localIp = resolveLocalIpv4()
+        acquireMulticastLock()
+        val localIp = resolveLocalLanIp()
         discoveryJob = scope.launch(Dispatchers.IO) {
             var udpSocket: DatagramSocket? = null
             try {
@@ -159,13 +212,18 @@ class LocalP2pSocketManager(
                         try {
                             val currentLocalIp = _sessionStatus.value.localIpAddress
                             val beaconBytes = "BOXBOY_HOST:$currentLocalIp:$DEFAULT_P2P_TCP_PORT".toByteArray(Charsets.UTF_8)
-                            val bcastPacket = DatagramPacket(
-                                beaconBytes,
-                                beaconBytes.size,
-                                InetAddress.getByName("255.255.255.255"),
-                                DEFAULT_P2P_UDP_PORT
-                            )
-                            udpSocket.send(bcastPacket)
+                            val broadcastTargets = resolveSubnetBroadcastAddresses()
+                            for (bcastAddr in broadcastTargets) {
+                                runCatching {
+                                    val bcastPacket = DatagramPacket(
+                                        beaconBytes,
+                                        beaconBytes.size,
+                                        bcastAddr,
+                                        DEFAULT_P2P_UDP_PORT
+                                    )
+                                    udpSocket.send(bcastPacket)
+                                }
+                            }
                         } catch (_: Exception) {
                         }
                     }
@@ -193,16 +251,22 @@ class LocalP2pSocketManager(
     }
 
     /**
-     * Opens a [java.net.ServerSocket] on [DEFAULT_P2P_TCP_PORT] and broadcasts UDP LAN discovery beacons.
+     * Opens a [java.net.ServerSocket] on [DEFAULT_P2P_TCP_PORT], broadcasts UDP LAN discovery beacons,
+     * and accepts up to [MAX_REMOTE_PEERS] concurrent peer connections (`4` players total).
      */
     fun startHosting(passphrase: String) {
+        startAcceptServer(passphrase)
+    }
+
+    fun startAcceptServer(passphrase: String) {
         stopActiveTcpSessionOnly()
-        val localIp = resolveLocalIpv4()
+        role = LocalP2pRole.HOST
+        val localIp = resolveLocalLanIp()
         _sessionStatus.value = _sessionStatus.value.copy(
             isHosting = true,
             isConnected = false,
             localIpAddress = localIp,
-            statusLog = "ServerSocket listening on $localIp:$DEFAULT_P2P_TCP_PORT (UDP beacon active)..."
+            statusLog = "ServerSocket listening on $localIp:$DEFAULT_P2P_TCP_PORT (4-Player Hub active)..."
         )
         startPassiveLanDiscoveryScanner()
 
@@ -215,13 +279,28 @@ class LocalP2pSocketManager(
                 while (isActive) {
                     val client = srv.accept()
                     client.tcpNoDelay = true
-                    handleConnectedSocket(client, passphrase, isHostSide = true)
+                    if (peerSockets.size >= MAX_REMOTE_PEERS) {
+                        runCatching {
+                            val rejectWriter = PrintWriter(client.getOutputStream(), true)
+                            rejectWriter.println("""{"type":"ROOM_FULL","maxRemotePeers":$MAX_REMOTE_PEERS}""")
+                            client.close()
+                        }
+                        continue
+                    }
+                    scope.launch(Dispatchers.IO) {
+                        handleConnectedSocket(
+                            socket = client,
+                            passphrase = passphrase,
+                            isHostSide = true,
+                            isHostRelay = true
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 if (_sessionStatus.value.isHosting) {
                     _sessionStatus.value = _sessionStatus.value.copy(
                         isHosting = false,
-                        isConnected = false,
+                        isConnected = peerSockets.isNotEmpty(),
                         statusLog = "Host ServerSocket stopped: ${e.localizedMessage ?: "closed"}"
                     )
                 }
@@ -234,6 +313,7 @@ class LocalP2pSocketManager(
      */
     fun connectToPeer(hostAddress: String, passphrase: String) {
         stopActiveTcpSessionOnly()
+        role = LocalP2pRole.CLIENT
         val cleanHost = hostAddress.trim().substringBefore(":").ifBlank { "127.0.0.1" }
         _sessionStatus.value = _sessionStatus.value.copy(
             isHosting = false,
@@ -245,7 +325,7 @@ class LocalP2pSocketManager(
                 val sock = Socket()
                 sock.tcpNoDelay = true
                 sock.connect(InetSocketAddress(cleanHost, DEFAULT_P2P_TCP_PORT), 4000)
-                handleConnectedSocket(sock, passphrase, isHostSide = false)
+                handleConnectedSocket(sock, passphrase, isHostSide = false, isHostRelay = false)
             } catch (e: Exception) {
                 Log.w(TAG, "Peer connection failed", e)
                 _sessionStatus.value = _sessionStatus.value.copy(
@@ -256,36 +336,44 @@ class LocalP2pSocketManager(
         }
     }
 
-    private suspend fun handleConnectedSocket(
+    suspend fun handleConnectedSocket(
         socket: Socket,
         passphrase: String,
-        isHostSide: Boolean
+        isHostSide: Boolean,
+        isHostRelay: Boolean = isHostSide
     ) = withContext(Dispatchers.IO) {
+        val peerAddr = socket.inetAddress?.hostAddress ?: "peer"
+        val peerPort = socket.port
+        val peerId = "$peerAddr:$peerPort"
         try {
-            activeSocket?.close()
-            activeSocket = socket
             val writer = PrintWriter(socket.getOutputStream(), true)
-            socketWriter = writer
-            val peerAddr = socket.inetAddress?.hostAddress ?: "peer"
+            val connection = PeerConnection(
+                peerId = peerId,
+                peerAddress = peerAddr,
+                socket = socket,
+                writer = writer
+            )
+            peerSockets[peerId] = connection
             val roleLabel = if (isHostSide) "Host ServerSocket" else "Client Socket"
             appendMessageToHistory(
                 P2pNetworkMessage(
                     packetType = "HANDSHAKE",
                     senderTag = "SYS",
-                    content = "$roleLabel linked with $peerAddr:$DEFAULT_P2P_TCP_PORT",
+                    content = "$roleLabel linked with $peerId (${peerSockets.size}/$MAX_REMOTE_PEERS peers)",
                     isOutgoing = true
                 )
             )
             _sessionStatus.value = _sessionStatus.value.copy(
                 isConnected = true,
-                connectedPeerAddress = peerAddr,
-                statusLog = "Connected to P2P Peer ($peerAddr) -- Bidirectional Socket Active!"
+                connectedPeerAddress = peerSockets.values.joinToString(", ") { it.peerAddress },
+                connectedPeerCount = peerSockets.size,
+                statusLog = "Connected to ${peerSockets.size} P2P Peer(s) ($peerAddr) -- Bidirectional Hub Active!"
             )
 
-            // Send initial HELLO handshake packet over the Socket
             val helloJson = JSONObject().apply {
                 put("type", "HELLO_HANDSHAKE")
                 put("sender", if (isHostSide) "Host-SquadLeader" else "Client-Reinforcement")
+                put("peerId", peerId)
                 put("text", "P2P Co-op Link Established on TCP :$DEFAULT_P2P_TCP_PORT")
             }
             writer.println(helloJson.toString())
@@ -293,28 +381,57 @@ class LocalP2pSocketManager(
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             var line: String? = reader.readLine()
             while (line != null && isActive) {
-                processIncomingPacket(line, passphrase)
+                processIncomingPacket(line, passphrase, sourcePeerId = peerId, isHostRelay = isHostRelay)
                 line = reader.readLine()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Socket stream ended: ${e.message}")
+            Log.w(TAG, "Socket stream ended ($peerId): ${e.message}")
         } finally {
-            _coopPeerState.value = null
+            peerSockets.remove(peerId)
+            runCatching { socket.close() }
+            val updatedStates = _remotePeerStates.value.toMutableMap().apply { remove(peerId) }
+            _remotePeerStates.value = updatedStates
+            _coopPeerState.value = updatedStates.values.firstOrNull()
+            val stillConnected = peerSockets.isNotEmpty()
             _sessionStatus.value = _sessionStatus.value.copy(
-                isConnected = false,
-                connectedPeerAddress = "",
-                statusLog = "Peer disconnected."
+                isConnected = stillConnected,
+                connectedPeerAddress = peerSockets.values.joinToString(", ") { it.peerAddress },
+                connectedPeerCount = peerSockets.size,
+                statusLog = if (stillConnected) {
+                    "Peer $peerAddr left; ${peerSockets.size} peer(s) still connected."
+                } else {
+                    "All peers disconnected."
+                }
             )
         }
     }
 
+    fun broadcastToAllPeers(rawLine: String, excludePeerId: String? = null): Int {
+        var delivered = 0
+        val deadPeers = mutableListOf<String>()
+        for ((id, conn) in peerSockets) {
+            if (excludePeerId != null && id == excludePeerId) continue
+            try {
+                synchronized(conn.writer) {
+                    conn.writer.println(rawLine)
+                }
+                delivered++
+            } catch (_: Exception) {
+                deadPeers.add(id)
+            }
+        }
+        for (dead in deadPeers) {
+            peerSockets.remove(dead)?.let { runCatching { it.socket.close() } }
+        }
+        return delivered
+    }
+
     /**
-     * Sends a real-time tactical message or callout over the active TCP [Socket] / [ServerSocket] connection.
+     * Sends a real-time tactical message or callout over all active TCP [Socket] connections.
      */
     fun sendTacticalMessage(senderName: String, messageText: String): Boolean {
         val cleanText = messageText.trim()
         if (cleanText.isEmpty()) return false
-        val writer = socketWriter
         val msg = P2pNetworkMessage(
             packetType = "TACTICAL_MSG",
             senderTag = senderName,
@@ -323,7 +440,7 @@ class LocalP2pSocketManager(
         )
         appendMessageToHistory(msg)
 
-        if (writer != null && _sessionStatus.value.isConnected) {
+        if (peerSockets.isNotEmpty() && _sessionStatus.value.isConnected) {
             scope.launch(Dispatchers.IO) {
                 try {
                     val obj = JSONObject().apply {
@@ -332,10 +449,10 @@ class LocalP2pSocketManager(
                         put("text", cleanText)
                         put("ts", msg.timestampMs)
                     }
-                    writer.println(obj.toString())
+                    val count = broadcastToAllPeers(obj.toString())
                     _sessionStatus.value = _sessionStatus.value.copy(
-                        packetsSent = _sessionStatus.value.packetsSent + 1,
-                        statusLog = "Sent P2P Message to ${_sessionStatus.value.connectedPeerAddress}: \"$cleanText\""
+                        packetsSent = _sessionStatus.value.packetsSent + count,
+                        statusLog = "Sent P2P Message to $count peer(s): \"$cleanText\""
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to send P2P message", e)
@@ -358,8 +475,7 @@ class LocalP2pSocketManager(
         score: Int,
         kills: Int
     ) {
-        val writer = socketWriter ?: return
-        if (!_sessionStatus.value.isConnected) return
+        if (peerSockets.isEmpty() || !_sessionStatus.value.isConnected) return
         scope.launch(Dispatchers.IO) {
             try {
                 val obj = JSONObject().apply {
@@ -375,36 +491,37 @@ class LocalP2pSocketManager(
                     put("score", score)
                     put("kills", kills)
                 }
-                writer.println(obj.toString())
-                _sessionStatus.value = _sessionStatus.value.copy(
-                    packetsSent = _sessionStatus.value.packetsSent + 1
-                )
+                val sent = broadcastToAllPeers(obj.toString())
+                if (sent > 0) {
+                    _sessionStatus.value = _sessionStatus.value.copy(
+                        packetsSent = _sessionStatus.value.packetsSent + sent
+                    )
+                }
             } catch (_: Exception) {
             }
         }
     }
 
     fun pushEncryptedSaveOverSocket(snapshot: CryptoSyncEngine.GameSaveSnapshot, passphrase: String): Boolean {
-        val writer = socketWriter
         val encrypted = CryptoSyncEngine.encryptSnapshot(snapshot, passphrase)
-        if (writer != null && _sessionStatus.value.isConnected) {
+        if (peerSockets.isNotEmpty() && _sessionStatus.value.isConnected) {
             scope.launch(Dispatchers.IO) {
                 try {
                     val obj = JSONObject().apply {
                         put("type", "SYNC_SAVE")
                         put("capsule", encrypted)
                     }
-                    writer.println(obj.toString())
+                    val sent = broadcastToAllPeers(obj.toString())
                     appendMessageToHistory(
                         P2pNetworkMessage(
                             packetType = "SYNC_SAVE",
                             senderTag = "LOCAL",
-                            content = "Pushed AES-256-GCM Save '${snapshot.slotName}' (Wave ${snapshot.highestWave})",
+                            content = "Pushed AES-256-GCM Save '${snapshot.slotName}' (Wave ${snapshot.highestWave}) to $sent peer(s)",
                             isOutgoing = true
                         )
                     )
                     _sessionStatus.value = _sessionStatus.value.copy(
-                        packetsSent = _sessionStatus.value.packetsSent + 1,
+                        packetsSent = _sessionStatus.value.packetsSent + sent,
                         lastSyncedSlotSummary = "Pushed '${snapshot.slotName}' (Wave ${snapshot.highestWave}) via encrypted P2P socket",
                         statusLog = "Encrypted AES-256-GCM save pushed to ${_sessionStatus.value.connectedPeerAddress}"
                     )
@@ -471,13 +588,25 @@ class LocalP2pSocketManager(
         }
     }
 
-    private fun processIncomingPacket(rawLine: String, passphrase: String) {
+    private fun processIncomingPacket(
+        rawLine: String,
+        passphrase: String,
+        sourcePeerId: String = "peer_default",
+        isHostRelay: Boolean = (role == LocalP2pRole.HOST)
+    ) {
         try {
             val obj = JSONObject(rawLine)
+            val pktType = obj.optString("type")
             _sessionStatus.value = _sessionStatus.value.copy(
                 packetsReceived = _sessionStatus.value.packetsReceived + 1
             )
-            when (obj.optString("type")) {
+
+            // When acting as 4-Player Star-Mesh Host, relay tactical/co-op packets to all other connected peers
+            if (isHostRelay && pktType in RELAYABLE_PACKET_TYPES && peerSockets.size > 1) {
+                broadcastToAllPeers(rawLine, excludePeerId = sourcePeerId)
+            }
+
+            when (pktType) {
                 "HELLO_HANDSHAKE" -> {
                     val sender = obj.optString("sender", "Peer")
                     val text = obj.optString("text", "Connected")
@@ -490,12 +619,12 @@ class LocalP2pSocketManager(
                     appendMessageToHistory(msg)
                     onTacticalMessageReceived(msg)
                 }
-                "TACTICAL_MSG" -> {
+                "TACTICAL_MSG", "TACTICAL_CALLOUT", "SQUAD_REVIVE_PULSE", "WAVE_SYNC" -> {
                     val sender = obj.optString("sender", "Co-op Peer")
-                    val text = obj.optString("text", "")
+                    val text = obj.optString("text", pktType)
                     if (text.isNotBlank()) {
                         val msg = P2pNetworkMessage(
-                            packetType = "TACTICAL_MSG",
+                            packetType = pktType,
                             senderTag = sender,
                             content = text,
                             isOutgoing = false
@@ -508,8 +637,12 @@ class LocalP2pSocketManager(
                     }
                 }
                 "COOP_STATE" -> {
-                    _coopPeerState.value = CoopPeerState(
-                        peerName = obj.optString("name", "Player 2"),
+                    val peerName = obj.optString("name", "Player 2")
+                    val peerKey = obj.optString("peerId", sourcePeerId).ifBlank { peerName }
+                    val state = CoopPeerState(
+                        peerId = peerKey,
+                        peerName = peerName,
+                        playerName = peerName,
                         x = obj.optDouble("x", 420.0).toFloat(),
                         y = obj.optDouble("y", 420.0).toFloat(),
                         aimAngleRad = obj.optDouble("aim", 0.0).toFloat(),
@@ -521,6 +654,8 @@ class LocalP2pSocketManager(
                         kills = obj.optInt("kills", 0),
                         lastUpdatedMs = System.currentTimeMillis()
                     )
+                    _coopPeerState.value = state
+                    _remotePeerStates.value = _remotePeerStates.value + (peerKey to state)
                 }
                 "SYNC_SAVE" -> {
                     val capsule = obj.optString("capsule", "")
@@ -558,50 +693,92 @@ class LocalP2pSocketManager(
 
     private fun stopActiveTcpSessionOnly() {
         serverJob?.cancel()
-        try {
-            socketWriter?.close()
-        } catch (_: Exception) {
+        for ((_, conn) in peerSockets) {
+            runCatching { conn.writer.close() }
+            runCatching { conn.socket.close() }
         }
-        try {
-            activeSocket?.close()
-        } catch (_: Exception) {
-        }
+        peerSockets.clear()
         try {
             serverSocket?.close()
         } catch (_: Exception) {
         }
-        socketWriter = null
-        activeSocket = null
         serverSocket = null
+        role = LocalP2pRole.IDLE
         _coopPeerState.value = null
+        _remotePeerStates.value = emptyMap()
     }
 
     fun stopSession() {
         discoveryJob?.cancel()
+        releaseMulticastLock()
         stopActiveTcpSessionOnly()
         _sessionStatus.value = _sessionStatus.value.copy(
             isHosting = false,
             isConnected = false,
-            connectedPeerAddress = ""
+            connectedPeerAddress = "",
+            connectedPeerCount = 0
         )
     }
 
     companion object {
-        fun resolveLocalIpv4(): String {
+        private val RELAYABLE_PACKET_TYPES = setOf(
+            "TACTICAL_MSG",
+            "TACTICAL_CALLOUT",
+            "SQUAD_REVIVE_PULSE",
+            "WAVE_SYNC",
+            "COOP_STATE"
+        )
+
+        private fun scoreNetworkInterface(name: String): Int {
+            val lower = name.lowercase()
+            return when {
+                lower.startsWith("wlan") || lower.startsWith("ap") || lower.startsWith("swlan") -> 100
+                lower.startsWith("rndis") || lower.startsWith("usb") || lower.startsWith("eth") -> 90
+                lower.startsWith("tailscale") || lower.startsWith("ts") -> 75
+                lower.startsWith("rmnet") || lower.startsWith("ccmni") || lower.startsWith("tun") || lower.startsWith("dummy") -> 10
+                else -> 50
+            }
+        }
+
+        fun resolveLocalLanIp(): String {
             return try {
-                val interfaces = NetworkInterface.getNetworkInterfaces() ?: return "127.0.0.1"
+                val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
+                val candidates = mutableListOf<Pair<Int, String>>()
                 for (intf in interfaces) {
                     if (!intf.isUp || intf.isLoopback) continue
+                    val score = scoreNetworkInterface(intf.name ?: "")
                     for (addr in intf.inetAddresses) {
                         if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                            return addr.hostAddress ?: "127.0.0.1"
+                            val ip = addr.hostAddress ?: continue
+                            candidates.add(score to ip)
                         }
                     }
                 }
-                "127.0.0.1"
+                candidates.maxByOrNull { it.first }?.second ?: "127.0.0.1"
             } catch (_: Exception) {
                 "127.0.0.1"
             }
         }
+
+        fun resolveLocalIpv4(): String = resolveLocalLanIp()
+
+        fun resolveSubnetBroadcastAddresses(): List<InetAddress> {
+            val result = linkedSetOf<InetAddress>()
+            runCatching { result.add(InetAddress.getByName("255.255.255.255")) }
+            runCatching {
+                val interfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                for (intf in interfaces) {
+                    if (!intf.isUp || intf.isLoopback) continue
+                    for (ifAddr in intf.interfaceAddresses) {
+                        val bcast = ifAddr.broadcast
+                        if (bcast is Inet4Address) {
+                            result.add(bcast)
+                        }
+                    }
+                }
+            }
+            return result.toList()
+        }
     }
 }
+

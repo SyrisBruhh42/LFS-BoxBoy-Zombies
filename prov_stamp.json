@@ -1,0 +1,17 @@
+{
+  "schema": "antigravity-prov-attestation-v2",
+  "cryptosuite": "eddsa-jcs-2022",
+  "project_id": "lfs-boxboy-zombies",
+  "stamped_at_utc": "2026-11-02T01:15:01Z",
+  "bom_sha256": "ee6531fa3b787c0b52320a5c0ea6ac27fe1b5b93d444119f436e47bb94d4b3a9",
+  "fre_902_13_14_compliant": true,
+  "sanitization_summary": {
+    "quarantined_git_dirs": [
+      "$HOME/.local/state/lfs-oasis/adoption-tx/tx-lfs-boxboy-zombies-6943f34c/git_quarantine/lfs-boxboy-zombies-.git"
+    ],
+    "secrets_scrubbed": 1,
+    "cdns_rewritten": 0,
+    "emojis_escaped": 0,
+    "home_paths_scrubbed": 0
+  }
+}

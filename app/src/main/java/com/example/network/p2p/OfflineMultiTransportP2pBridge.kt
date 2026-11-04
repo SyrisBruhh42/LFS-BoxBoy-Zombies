@@ -1,15 +1,28 @@
 package com.example.network.p2p
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
+import android.bluetooth.BluetoothSocket
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.PrintWriter
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.UUID
 
 /**
- * Track 8: Offline Local Host Multi-Transport P2P Bridge (USB + Wi-Fi LAN + Bluetooth).
+ * Track 8: Offline Local Host Multi-Transport P2P Bridge (USB + Wi-Fi LAN + Bluetooth RFCOMM).
  * Allows any device to act as the authoritative Local Host completely offline over:
  * 1. USB Tethering / ADB Bridge (`rndis0`, `usb0`, `ncm0`, or `127.0.0.1:48899` ADB reverse/forward)
  * 2. Wi-Fi LAN / Hotspot (`wlan0`, `ap0`, `p2p-wlan0` UDP `48898` + TCP `48899`)
- * 3. Bluetooth RFCOMM / BLE L2CAP (`UUID 8e7f42b0-9c12-4a88-b512-00424f58424f`)
+ * 3. Bluetooth Classic RFCOMM (`SPP_STANDARD_UUID` / `BLUETOOTH_BOXBOYS_SERVICE_UUID`)
  */
 enum class OfflineHostTransportKind(
     val displayName: String,
@@ -30,13 +43,102 @@ data class DiscoveredTransportInterface(
     val endpointUri: String
 )
 
+data class BluetoothRfcommPeerLink(
+    val deviceName: String,
+    val deviceAddress: String,
+    val socket: BluetoothSocket,
+    val reader: BufferedReader,
+    val writer: PrintWriter
+) {
+    fun sendLine(line: String): Boolean {
+        return runCatching {
+            synchronized(writer) {
+                writer.println(line)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun close() {
+        runCatching { writer.close() }
+        runCatching { reader.close() }
+        runCatching { socket.close() }
+    }
+}
+
 object OfflineMultiTransportP2pBridge {
     const val P2P_TCP_PORT = 48899
     const val P2P_UDP_BEACON_PORT = 48898
+    const val BLUETOOTH_SERVICE_NAME = "LfsBoxBoysCoopRfcomm"
     val BLUETOOTH_BOXBOYS_SERVICE_UUID: UUID = UUID.fromString("8e7f42b0-9c12-4a88-b512-00424f58424f")
+    val BLUETOOTH_SPP_STANDARD_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private val USB_INTERFACE_PREFIXES = listOf("rndis", "usb", "ncm", "eth_usb")
     private val WIFI_INTERFACE_PREFIXES = listOf("wlan", "ap", "p2p", "swlan", "wl")
+    private val CELLULAR_TUNNEL_PREFIXES = listOf("rmnet", "ccmni", "tun", "dummy")
+
+    /**
+     * Checks whether runtime `BLUETOOTH_CONNECT` permission is granted (Android 12+ API 31+).
+     */
+    fun hasBluetoothConnectPermission(context: Context?): Boolean {
+        if (context == null) return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    /**
+     * Opens an RFCOMM [BluetoothServerSocket] for offline Bluetooth P2P hosting (`FP-N05`).
+     */
+    @SuppressLint("MissingPermission")
+    fun openBluetoothRfcommServer(
+        context: Context?,
+        serviceUuid: UUID = BLUETOOTH_BOXBOYS_SERVICE_UUID
+    ): Result<BluetoothServerSocket> {
+        return runCatching {
+            require(hasBluetoothConnectPermission(context)) {
+                "BLUETOOTH_CONNECT permission is required to host over Bluetooth RFCOMM"
+            }
+            val btManager = context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val adapter: BluetoothAdapter = btManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+                ?: error("BluetoothAdapter unavailable on this device")
+            require(adapter.isEnabled) { "Bluetooth adapter is disabled" }
+            adapter.listenUsingInsecureRfcommWithServiceRecord(BLUETOOTH_SERVICE_NAME, serviceUuid)
+        }
+    }
+
+    /**
+     * Connects to a paired [BluetoothDevice] over RFCOMM (`BLUETOOTH_BOXBOYS_SERVICE_UUID` with
+     * fallback to standard SPP `00001101-0000-1000-8000-00805F9B34FB`).
+     */
+    @SuppressLint("MissingPermission")
+    fun connectBluetoothRfcommPeer(
+        context: Context?,
+        device: BluetoothDevice,
+        serviceUuid: UUID = BLUETOOTH_BOXBOYS_SERVICE_UUID
+    ): Result<BluetoothRfcommPeerLink> {
+        return runCatching {
+            require(hasBluetoothConnectPermission(context)) {
+                "BLUETOOTH_CONNECT permission is required to connect over Bluetooth RFCOMM"
+            }
+            val btManager = context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            btManager?.adapter?.cancelDiscovery()
+            val socket = runCatching {
+                device.createInsecureRfcommSocketToServiceRecord(serviceUuid).apply { connect() }
+            }.getOrElse {
+                device.createInsecureRfcommSocketToServiceRecord(BLUETOOTH_SPP_STANDARD_UUID).apply { connect() }
+            }
+            BluetoothRfcommPeerLink(
+                deviceName = runCatching { device.name.orEmpty() }.getOrDefault("BT-Survivor"),
+                deviceAddress = runCatching { device.address.orEmpty() }.getOrDefault("00:00:00:00:00:00"),
+                socket = socket,
+                reader = BufferedReader(InputStreamReader(socket.inputStream, Charsets.UTF_8)),
+                writer = PrintWriter(socket.outputStream, true)
+            )
+        }
+    }
 
     /**
      * Scans local OS network interfaces to auto-detect active USB tethering (`rndis0`/`usb0`)
@@ -50,6 +152,7 @@ object OfflineMultiTransportP2pBridge {
                 val nif = interfaces.nextElement()
                 if (!nif.isUp || nif.isLoopback) continue
                 val nameLower = nif.name.lowercase()
+                if (CELLULAR_TUNNEL_PREFIXES.any { nameLower.startsWith(it) }) continue
                 val transport = when {
                     USB_INTERFACE_PREFIXES.any { nameLower.startsWith(it) } ->
                         OfflineHostTransportKind.USB_DIRECT_BRIDGE
@@ -112,3 +215,4 @@ object OfflineMultiTransportP2pBridge {
         }
     }
 }
+
