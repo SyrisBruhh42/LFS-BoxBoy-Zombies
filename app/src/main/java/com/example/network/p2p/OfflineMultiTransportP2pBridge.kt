@@ -77,6 +77,9 @@ object OfflineMultiTransportP2pBridge {
     private val WIFI_INTERFACE_PREFIXES = listOf("wlan", "ap", "p2p", "swlan", "wl")
     private val CELLULAR_TUNNEL_PREFIXES = listOf("rmnet", "ccmni", "tun", "dummy")
 
+    @Volatile
+    internal var activeBluetoothServerSocket: BluetoothServerSocket? = null
+
     /**
      * Checks whether runtime `BLUETOOTH_CONNECT` permission is granted (Android 12+ API 31+).
      */
@@ -90,14 +93,26 @@ object OfflineMultiTransportP2pBridge {
     }
 
     /**
+     * Closes any active RFCOMM [BluetoothServerSocket] before re-hosting (`BB-V4-D00-69d43f7f`).
+     */
+    @Synchronized
+    fun closeBluetoothRfcommServer() {
+        runCatching { activeBluetoothServerSocket?.close() }
+        activeBluetoothServerSocket = null
+    }
+
+    /**
      * Opens an RFCOMM [BluetoothServerSocket] for offline Bluetooth P2P hosting (`FP-N05`).
+     * Automatically closes any prior [activeBluetoothServerSocket] before re-listening (`BB-V4-D00-69d43f7f`).
      */
     @SuppressLint("MissingPermission")
+    @Synchronized
     fun openBluetoothRfcommServer(
         context: Context?,
         serviceUuid: UUID = BLUETOOTH_BOXBOYS_SERVICE_UUID
     ): Result<BluetoothServerSocket> {
         return runCatching {
+            closeBluetoothRfcommServer()
             require(hasBluetoothConnectPermission(context)) {
                 "BLUETOOTH_CONNECT permission is required to host over Bluetooth RFCOMM"
             }
@@ -105,9 +120,16 @@ object OfflineMultiTransportP2pBridge {
             val adapter: BluetoothAdapter = btManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
                 ?: error("BluetoothAdapter unavailable on this device")
             require(adapter.isEnabled) { "Bluetooth adapter is disabled" }
-            adapter.listenUsingInsecureRfcommWithServiceRecord(BLUETOOTH_SERVICE_NAME, serviceUuid)
+            val srv = adapter.listenUsingInsecureRfcommWithServiceRecord(BLUETOOTH_SERVICE_NAME, serviceUuid)
+            activeBluetoothServerSocket = srv
+            srv
         }
     }
+
+    fun startBluetoothRfcommHosting(
+        context: Context?,
+        serviceUuid: UUID = BLUETOOTH_BOXBOYS_SERVICE_UUID
+    ): Result<BluetoothServerSocket> = openBluetoothRfcommServer(context, serviceUuid)
 
     /**
      * Connects to a paired [BluetoothDevice] over RFCOMM (`BLUETOOTH_BOXBOYS_SERVICE_UUID` with
@@ -143,8 +165,9 @@ object OfflineMultiTransportP2pBridge {
     /**
      * Scans local OS network interfaces to auto-detect active USB tethering (`rndis0`/`usb0`)
      * and Wi-Fi LAN/Hotspot (`wlan0`/`ap0`) interfaces for zero-configuration offline hosting.
+     * When [context] is provided, checks Bluetooth adapter and `BLUETOOTH_CONNECT` permission (`BB-V4-D00-8db57dac`).
      */
-    fun discoverOfflineHostInterfaces(): List<DiscoveredTransportInterface> {
+    fun discoverOfflineHostInterfaces(context: Context? = null): List<DiscoveredTransportInterface> {
         val discovered = mutableListOf<DiscoveredTransportInterface>()
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
@@ -153,6 +176,7 @@ object OfflineMultiTransportP2pBridge {
                 if (!nif.isUp || nif.isLoopback) continue
                 val nameLower = nif.name.lowercase()
                 if (CELLULAR_TUNNEL_PREFIXES.any { nameLower.startsWith(it) }) continue
+
                 val transport = when {
                     USB_INTERFACE_PREFIXES.any { nameLower.startsWith(it) } ->
                         OfflineHostTransportKind.USB_DIRECT_BRIDGE
@@ -180,7 +204,7 @@ object OfflineMultiTransportP2pBridge {
             // Ignore interface enumeration restrictions in sandboxed environments
         }
 
-        // Always include ADB USB Loopback Bridge & Bluetooth RFCOMM Descriptor
+        // Always include ADB USB Loopback Bridge
         discovered.add(
             DiscoveredTransportInterface(
                 interfaceName = "adb-usb-loopback",
@@ -189,14 +213,27 @@ object OfflineMultiTransportP2pBridge {
                 endpointUri = "tcp://127.0.0.1:$P2P_TCP_PORT"
             )
         )
-        discovered.add(
-            DiscoveredTransportInterface(
-                interfaceName = "bt-rfcomm-channel",
-                ipv4Address = "bt://rfcomm",
-                transportKind = OfflineHostTransportKind.BLUETOOTH_RFCOMM_BLE,
-                endpointUri = "bt-rfcomm://$BLUETOOTH_BOXBOYS_SERVICE_UUID"
+
+        val isBtAvailable = if (context == null) {
+            true
+        } else {
+            hasBluetoothConnectPermission(context) && runCatching {
+                val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                val adapter = btManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+                adapter?.isEnabled == true
+            }.getOrDefault(false)
+        }
+
+        if (isBtAvailable) {
+            discovered.add(
+                DiscoveredTransportInterface(
+                    interfaceName = "bt-rfcomm-channel",
+                    ipv4Address = "bt://rfcomm",
+                    transportKind = OfflineHostTransportKind.BLUETOOTH_RFCOMM_BLE,
+                    endpointUri = "bt-rfcomm://$BLUETOOTH_BOXBOYS_SERVICE_UUID"
+                )
             )
-        )
+        }
         return discovered
     }
 

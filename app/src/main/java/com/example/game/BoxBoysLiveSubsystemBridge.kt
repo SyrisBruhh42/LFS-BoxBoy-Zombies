@@ -353,7 +353,7 @@ object BoxBoysLiveSubsystemBridge {
 
     fun evaluateAiDirectorModules(input: LiveSubsystemTickInput): Map<String, Double> {
         val proposal = LocalOllamaMapDirector.parseOrSynthesizeSector(
-            rawOllamaJson = null,
+            rawOllamaJson = LocalOllamaMapDirector.lastPrefetchedSectorJson,
             wave = input.wave,
             biomeTag = "OAKRIDGE_PLAZA",
             seed = input.seed

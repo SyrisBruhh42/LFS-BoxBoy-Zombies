@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,9 +103,10 @@ data class ThemeConfig(
          * Computes WCAG 2.1 relative luminance for an sRGB [Color].
          */
         fun relativeLuminance(color: Color): Double {
-            val r = channelLuminance(color.red)
-            val g = channelLuminance(color.green)
-            val b = channelLuminance(color.blue)
+            val srgb = color.convert(ColorSpaces.Srgb)
+            val r = channelLuminance(srgb.red)
+            val g = channelLuminance(srgb.green)
+            val b = channelLuminance(srgb.blue)
             return 0.2126 * r + 0.7152 * g + 0.0722 * b
         }
 
@@ -111,7 +114,12 @@ data class ThemeConfig(
          * Computes WCAG 2.1 contrast ratio `(L1 + 0.05) / (L2 + 0.05)` between two colors.
          */
         fun calculateContrastRatio(foreground: Color, background: Color): Double {
-            val l1 = relativeLuminance(foreground)
+            val compositedForeground = if (foreground.alpha < 1f) {
+                foreground.compositeOver(background)
+            } else {
+                foreground
+            }
+            val l1 = relativeLuminance(compositedForeground)
             val l2 = relativeLuminance(background)
             val lighter = max(l1, l2)
             val darker = min(l1, l2)

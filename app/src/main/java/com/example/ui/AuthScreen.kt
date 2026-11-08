@@ -196,6 +196,15 @@ fun signOut(
     if (isFirebaseInitialized(context)) {
         runCatching { Firebase.auth.signOut() }
     }
+    runCatching {
+        context.getSharedPreferences("boxboy_offline_saves", Context.MODE_PRIVATE)
+            .edit()
+            .remove("boxboy_gdrive_chronicles_v2")
+            .remove("boxboy_gdrive_chronicles_v1")
+            .remove("boxboy_gdrive_root_folder_id")
+            .remove("boxboy_gdrive_saves_folder_id")
+            .apply()
+    }
     scope.launch {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())

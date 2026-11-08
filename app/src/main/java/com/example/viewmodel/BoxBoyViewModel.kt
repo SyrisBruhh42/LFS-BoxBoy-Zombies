@@ -58,6 +58,7 @@ import com.example.input.ControllerManager
 import com.example.input.GamepadAction
 import com.example.input.GamepadMapping
 import com.example.input.TouchButtonId
+import com.example.data.CANONICAL_RMBLYN_CHANNELS
 import com.example.network.CoopPeerState
 import com.example.network.HeadlessKonsoleServer
 import com.example.network.LocalP2pSocketManager
@@ -65,6 +66,10 @@ import com.example.network.NetworkHealthService
 import com.example.network.NetworkHealthSnapshot
 import com.example.network.OasisHostedServerClient
 import com.example.network.OasisSessionStatus
+import com.example.network.RmblynFiveChannelRouter
+import com.example.network.SquadVoicePttAndPingEngine
+import com.example.network.TacticalPingCallout
+import com.example.network.VoicePttTelemetryState
 import com.example.ui.theme.AccessibilityThemeState
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -123,6 +128,10 @@ data class ControllerConfigState(
     val colorblindHazardMarkers: Boolean = false,
     val reduceMotionAndFlashes: Boolean = false,
     val screenReaderAnnouncements: Boolean = true,
+    val keyUp: Int = KeyEvent.KEYCODE_W,
+    val keyDown: Int = KeyEvent.KEYCODE_S,
+    val keyLeft: Int = KeyEvent.KEYCODE_A,
+    val keyRight: Int = KeyEvent.KEYCODE_D,
     val keyFire: Int = KeyEvent.KEYCODE_BUTTON_A,
     val keyInteract: Int = KeyEvent.KEYCODE_BUTTON_B,
     val keyPlaceBarrel: Int = KeyEvent.KEYCODE_BUTTON_X,
@@ -231,25 +240,31 @@ class BoxBoyViewModel(
     private val _isOasisOverlayOpen = MutableStateFlow(false)
     val isOasisOverlayOpen: StateFlow<Boolean> = _isOasisOverlayOpen.asStateFlow()
 
+    private val _activeRmblynChannel = MutableStateFlow("party")
+    val activeRmblynChannel: StateFlow<String> = _activeRmblynChannel.asStateFlow()
+
+    val voicePttEngine = SquadVoicePttAndPingEngine()
+    val voicePttTelemetry: StateFlow<VoicePttTelemetryState> = voicePttEngine.telemetry
+
     private val _rmblynMessages = MutableStateFlow<List<RmblynChatMessage>>(
         listOf(
             RmblynChatMessage(
                 id = "seed_willow",
-                channelId = "arcade-lounge",
+                channelId = "party",
                 senderHandle = "@willow",
                 messageText = "Hearth Key verified! Ready for Tag-Team Rescue and Cardboard Critter wave defense.",
                 isCompanionBot = true
             ),
             RmblynChatMessage(
                 id = "seed_cinder",
-                channelId = "arcade-lounge",
+                channelId = "global",
                 senderHandle = "@cinder",
                 messageText = "Starlight Rupees & Wonder Relics synced across TrashArcade Hall.",
                 isCompanionBot = true
             ),
             RmblynChatMessage(
                 id = "seed_mote",
-                channelId = "arcade-lounge",
+                channelId = "guild",
                 senderHandle = "@mote",
                 messageText = "Sanctuary Storyteller [cb64f9e7] is standing by in the top ribbon!",
                 isCompanionBot = true
@@ -273,6 +288,14 @@ class BoxBoyViewModel(
             saveLocalOfflineSlot(snapshot)
         },
         onTacticalMessageReceived = { netMsg ->
+            val incomingChat = RmblynFiveChannelRouter.routeMessage(
+                rawChannelId = _activeRmblynChannel.value,
+                senderHandle = netMsg.senderTag,
+                messageText = netMsg.content,
+                isCompanionBot = false,
+                timestampMs = netMsg.timestampMs
+            )
+            _rmblynMessages.value = (_rmblynMessages.value + incomingChat).takeLast(32)
             _gameState.value = _gameState.value.copy(
                 statusToast = "P2P [${netMsg.senderTag}]: ${netMsg.content}"
             )
@@ -286,13 +309,12 @@ class BoxBoyViewModel(
             saveLocalOfflineSlot(snapshot)
         },
         onTacticalMessageReceived = { netMsg ->
-            val incomingChat = RmblynChatMessage(
-                id = "ws_${netMsg.timestampMs}",
-                channelId = "arcade-lounge",
+            val incomingChat = RmblynFiveChannelRouter.routeMessage(
+                rawChannelId = _activeRmblynChannel.value,
                 senderHandle = netMsg.senderTag,
                 messageText = netMsg.content,
-                timestampMs = netMsg.timestampMs,
-                isCompanionBot = false
+                isCompanionBot = false,
+                timestampMs = netMsg.timestampMs
             )
             _rmblynMessages.value = (_rmblynMessages.value + incomingChat).takeLast(32)
             _gameState.value = _gameState.value.copy(
@@ -406,6 +428,9 @@ class BoxBoyViewModel(
     }
 
     init {
+        SquadVoicePttAndPingEngine.onSharedToggleVoicePtt = { toggleVoicePtt() }
+        SquadVoicePttAndPingEngine.onSharedSendTacticalPing = { sendTacticalPing(it) }
+        SquadVoicePttAndPingEngine.onSharedSelectRmblynChannel = { selectRmblynChannel(it) }
         loadOfflineSlotsFromPrefs()
         loadGamepadMappingFromPrefs()
         loadStoreSettingsAndCareerFromPrefs()
@@ -1237,7 +1262,7 @@ class BoxBoyViewModel(
                     activePlayers = (st.coopPeers.size + 1).coerceIn(1, 4)
                 )
             }
-            if (hostMode == LfsHostMode.HOST_LOCAL_DEVICE) {
+            if (hostMode.isLocalHost) {
                 p2pManager.startHosting(_syncPassphrase.value)
             }
             _gameState.value = _gameState.value.copy(
@@ -1412,14 +1437,8 @@ class BoxBoyViewModel(
                     "${env.folderPath} [${env.fileKind.shortBadge}] '${env.slotName}'"
                 )
             }.onFailure {
-                val st = _gameState.value
-                _gameState.value = st.copy(
-                    wave = env.highestWave.coerceAtLeast(1),
-                    totalKills = env.totalKills.coerceAtLeast(0),
-                    points = env.points.coerceAtLeast(500),
-                    isGameOver = false,
-                    hp = st.maxHp,
-                    statusToast = "RESTORED ${env.folderPath} [${env.fileKind.shortBadge}]: ${env.slotName} (Wave ${env.highestWave})"
+                _gameState.value = _gameState.value.copy(
+                    statusToast = "DECRYPTION FAILED: Invalid passphrase or corrupted envelope for '${env.slotName}'"
                 )
             }
         }
@@ -1436,14 +1455,8 @@ class BoxBoyViewModel(
         decrypted.onSuccess { snap ->
             applySnapshotToGame(snap, "Cloud Slot '${slot.slotName}'")
         }.onFailure {
-            val st = _gameState.value
-            _gameState.value = st.copy(
-                wave = slot.highestWave.toInt().coerceAtLeast(1),
-                totalKills = slot.totalKills.toInt().coerceAtLeast(0),
-                points = slot.points.toInt().coerceAtLeast(500),
-                isGameOver = false,
-                hp = st.maxHp,
-                statusToast = "LOADED CLOUD SLOT: ${slot.slotName} (Wave ${slot.highestWave})"
+            _gameState.value = _gameState.value.copy(
+                statusToast = "DECRYPTION FAILED: Invalid passphrase or corrupted envelope for '${slot.slotName}'"
             )
         }
     }
@@ -1787,11 +1800,15 @@ class BoxBoyViewModel(
             _controllerConfig.value = _controllerConfig.value.copy(highContrastMode = true, crtScanlinesEnabled = false)
         } else if (themeLower == "calm") {
             _controllerConfig.value = _controllerConfig.value.copy(reduceMotionAndFlashes = true, crtScanlinesEnabled = false)
+        } else if (themeLower == "evergreen-light") {
+            _controllerConfig.value = _controllerConfig.value.copy(highContrastMode = false, crtScanlinesEnabled = false)
+        } else if (themeLower == "evergreen-dark") {
+            _controllerConfig.value = _controllerConfig.value.copy(highContrastMode = false, crtScanlinesEnabled = true)
         }
-        val targetHostMode = when (params.oasisHostMode?.uppercase()) {
-            "HOST_LOCAL_DEVICE", "HOST-02" -> LfsHostMode.HOST_LOCAL_DEVICE
-            "LAUNCH_U2_HOSTING_SERVICE", "HOST-01" -> LfsHostMode.LAUNCH_U2_HOSTING_SERVICE
-            else -> oasisStatus.value.hostMode
+        val targetHostMode = if (!params.oasisHostMode.isNullOrBlank()) {
+            LfsHostMode.fromWireValue(params.oasisHostMode)
+        } else {
+            oasisStatus.value.hostMode
         }
         oasisServerClient.setHostMode(targetHostMode)
         if (!params.oasisRoomCode.isNullOrBlank()) {
@@ -1882,27 +1899,125 @@ class BoxBoyViewModel(
     }
 
     /**
-     * Posts a message to the 16-Channel Rmblyn Family Chat (`@willow`, `@cinder`, `@mote`)
+     * Selects one of the 5 canonical Rmblyn channels (`global`, `guild`, `party`, `trade`, `whisper` - RATCHET-8).
+     */
+    fun selectRmblynChannel(channelId: String) {
+        val normalized = RmblynFiveChannelRouter.normalizeChannel(channelId)
+        _activeRmblynChannel.value = normalized
+        SquadVoicePttAndPingEngine.setSharedActiveChannel(normalized)
+        _gameState.value = _gameState.value.copy(
+            statusToast = "RMBLYN CHANNEL ACTIVE: #${normalized.uppercase()}"
+        )
+    }
+
+    /**
+     * Toggles Squad Voice Push-To-Talk (`VOICE_PTT_FRAME`) or zero-permission Tactical Synth Comms.
+     */
+    fun toggleVoicePtt(): Boolean {
+        val framePacket = voicePttEngine.toggleVoicePtt(
+            roomCode = oasisStatus.value.roomCode,
+            senderHandle = "@${oasisStatus.value.tailscaleHandshake.subuserId}",
+            channelId = _activeRmblynChannel.value
+        )
+        val nextActive = framePacket != null && voicePttEngine.telemetry.value.isTransmitting
+        val handshake = oasisStatus.value.tailscaleHandshake
+        val activeChannel = _activeRmblynChannel.value
+        if (nextActive) {
+            val frame = framePacket ?: voicePttEngine.emitVoicePttFrame(
+                roomCode = oasisStatus.value.roomCode,
+                channelId = activeChannel,
+                senderHandle = "@${handshake.subuserId}"
+            )
+            if (frame != null) {
+                oasisServerClient.sendTacticalMessage("@${handshake.subuserId}", "[PTT:${frame.dbLevel.toInt()}dB] Squad radio check on #$activeChannel")
+                p2pManager.sendTacticalMessage("@${handshake.subuserId}", "[PTT:${frame.dbLevel.toInt()}dB] Squad radio check on #$activeChannel")
+                val botReply = voicePttEngine.buildCompanionRadioReply(
+                    callout = null,
+                    channelId = activeChannel,
+                    wave = _gameState.value.wave,
+                    roomCode = OasisImagineeringTranslator.formatOasisPartyRoomCode(oasisStatus.value.activeRoom.roomCode)
+                )
+                _rmblynMessages.value = (_rmblynMessages.value + botReply).takeLast(32)
+            }
+            _gameState.value = _gameState.value.copy(
+                statusToast = "SQUAD PTT LIVE [#${activeChannel.uppercase()}]: Transmitting 16kHz ADPCM / Synth Radio"
+            )
+        } else {
+            _gameState.value = _gameState.value.copy(
+                statusToast = "SQUAD PTT STANDBY [#${activeChannel.uppercase()}]"
+            )
+        }
+        return nextActive
+    }
+
+    /**
+     * Emits a rate-limited 6-sector Tactical Ping Callout across WebSocket `:19448`, P2P `:48899`,
+     * and the active Rmblyn channel (`RATCHET-8`), with deterministic companion radio confirmation.
+     */
+    fun sendTacticalPing(callout: TacticalPingCallout): Boolean {
+        val st = _gameState.value
+        val handshake = oasisStatus.value.tailscaleHandshake
+        val activeChannel = _activeRmblynChannel.value
+        val packet = voicePttEngine.createTacticalPing(
+            callout = callout,
+            roomCode = oasisStatus.value.roomCode,
+            channelId = activeChannel,
+            senderHandle = "@${handshake.subuserId}",
+            sectorRoomIndex = st.unlockedRooms.maxOrNull() ?: 0,
+            worldX = st.playerX,
+            worldY = st.playerY
+        )
+        if (packet == null) {
+            _gameState.value = st.copy(
+                statusToast = "QUICKCHAT COOLDOWN: Radio squelch rate limit active"
+            )
+            return false
+        }
+        val wireText = "[${callout.badgeCode}] ${callout.calloutText}"
+        val pingMsg = RmblynFiveChannelRouter.routeMessage(
+            rawChannelId = activeChannel,
+            senderHandle = "@${handshake.subuserId}",
+            messageText = wireText,
+            isCompanionBot = false
+        )
+        val companionReply = voicePttEngine.buildCompanionRadioReply(
+            callout = callout,
+            channelId = activeChannel,
+            wave = st.wave,
+            roomCode = OasisImagineeringTranslator.formatOasisPartyRoomCode(oasisStatus.value.activeRoom.roomCode)
+        )
+        _rmblynMessages.value = (_rmblynMessages.value + listOf(pingMsg, companionReply)).takeLast(32)
+        oasisServerClient.sendTacticalMessage("@${handshake.subuserId}", wireText)
+        p2pManager.sendTacticalMessage("@${handshake.subuserId}", wireText)
+        _gameState.value = st.copy(
+            statusToast = "TACTICAL PING [#${activeChannel.uppercase()}]: ${callout.badgeCode} - ${callout.shortLabel}"
+        )
+        return true
+    }
+
+    /**
+     * Posts a message to the 5-Channel Rmblyn Family Chat (`global`, `guild`, `party`, `trade`, `whisper` | `@willow`, `@cinder`, `@mote`)
      * without dropping the active party room.
      */
-    fun sendRmblynFamilyChatMessage(rawText: String, channelId: String = "arcade-lounge") {
+    fun sendRmblynFamilyChatMessage(rawText: String, channelId: String = _activeRmblynChannel.value) {
         val trimmed = rawText.trim()
         if (trimmed.isBlank()) return
+        val normalizedChannel = RmblynFiveChannelRouter.normalizeChannel(channelId)
         val handshake = oasisStatus.value.tailscaleHandshake
-        val playerMsg = RmblynChatMessage(
-            id = "msg_${System.currentTimeMillis()}",
-            channelId = channelId,
+        val playerMsg = RmblynFiveChannelRouter.routeMessage(
+            rawChannelId = normalizedChannel,
             senderHandle = "@${handshake.subuserId}",
             messageText = trimmed,
             isCompanionBot = false
         )
-        val companionReply = buildCompanionRmblynReply(trimmed, channelId)
+        val companionReply = buildCompanionRmblynReply(trimmed, normalizedChannel)
         _rmblynMessages.value = (_rmblynMessages.value + listOfNotNull(playerMsg, companionReply)).takeLast(32)
         oasisServerClient.sendTacticalMessage("@${handshake.subuserId}", trimmed)
+        p2pManager.sendTacticalMessage("@${handshake.subuserId}", trimmed)
         viewModelScope.launch {
             oasisServerClient.postRmblynWaveChallengeCard(
                 challengeSummary = trimmed,
-                channelId = channelId,
+                channelId = normalizedChannel,
                 subuserRole = handshake.persona
             )
         }

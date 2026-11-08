@@ -44,6 +44,14 @@ object UniversalAuthoritativeHostEngine {
     const val BASE_STARTING_CURRENCY = 500
     const val CURRENCY_STIPEND_PER_WAVE = 650
     const val BYTES_PER_QUANTIZED_ZOMBIE = 8
+    const val MAX_QUANTIZED_DELTA_BYTES = 15_360
+    const val MAX_QUANTIZED_ZOMBIES = MAX_QUANTIZED_DELTA_BYTES / BYTES_PER_QUANTIZED_ZOMBIE
+
+    private fun quantizeDeciCoordinate(coord: Float): Short {
+        if (!coord.isFinite()) return 0
+        val scaled = (coord * 10f).coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat())
+        return scaled.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
 
     /**
      * Packs a list of [QuantizedZombieSample] into a compact binary delta (`8` bytes per zombie:
@@ -51,12 +59,17 @@ object UniversalAuthoritativeHostEngine {
      * 120 zombies = `960` bytes (`< 1 KB`).
      */
     fun packQuantizedZombieDelta(zombies: List<QuantizedZombieSample>): ByteArray {
-        val buf = ByteBuffer.allocate(zombies.size * BYTES_PER_QUANTIZED_ZOMBIE)
+        val boundedZombies = if (zombies.size > MAX_QUANTIZED_ZOMBIES) {
+            zombies.take(MAX_QUANTIZED_ZOMBIES)
+        } else {
+            zombies
+        }
+        val buf = ByteBuffer.allocate(boundedZombies.size * BYTES_PER_QUANTIZED_ZOMBIE)
             .order(ByteOrder.BIG_ENDIAN)
-        for (z in zombies) {
+        for (z in boundedZombies) {
             val clampedId = z.id.coerceIn(0, 65_535)
-            val xDeci = (z.x * 10f).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-            val yDeci = (z.y * 10f).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val xDeci = quantizeDeciCoordinate(z.x)
+            val yDeci = quantizeDeciCoordinate(z.y)
             val clampedHp = z.hp.coerceIn(0, 65_535)
             buf.putShort(clampedId.toShort())
             buf.putShort(xDeci)
@@ -68,9 +81,12 @@ object UniversalAuthoritativeHostEngine {
 
     /**
      * Unpacks a binary delta produced by [packQuantizedZombieDelta] back into [QuantizedZombieSample] records.
+     * Rejects truncated (`bytes.size % 8 != 0`) or oversized (`> 15,360 B`) payloads (`BB-V4-D00-04bafc85`).
      */
     fun unpackQuantizedZombieDelta(bytes: ByteArray): List<QuantizedZombieSample> {
-        if (bytes.isEmpty()) return emptyList()
+        if (bytes.isEmpty() || bytes.size > MAX_QUANTIZED_DELTA_BYTES || bytes.size % BYTES_PER_QUANTIZED_ZOMBIE != 0) {
+            return emptyList()
+        }
         val count = bytes.size / BYTES_PER_QUANTIZED_ZOMBIE
         val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
         val out = ArrayList<QuantizedZombieSample>(count)
@@ -99,8 +115,10 @@ object UniversalAuthoritativeHostEngine {
     }
 
     fun unpackQuantizedZombieDeltaBase64(encodedB64: String): List<QuantizedZombieSample> {
-        if (encodedB64.isBlank()) return emptyList()
-        return unpackQuantizedZombieDelta(Base64.getDecoder().decode(encodedB64.trim()))
+        val trimmed = encodedB64.trim()
+        if (trimmed.isEmpty() || trimmed.length > 20_480) return emptyList()
+        val decoded = runCatching { Base64.getDecoder().decode(trimmed) }.getOrNull() ?: return emptyList()
+        return unpackQuantizedZombieDelta(decoded)
     }
 
     /**

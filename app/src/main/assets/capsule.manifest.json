@@ -1,11 +1,21 @@
 {
   "schema_version": "cp12",
+  "schema_compat": "cp12-capsule-manifest-v2",
+  "portfolio_id": "PF-18",
+  "capsule_code": "OASIS-BBZM",
   "project_id": "lfs-boxboy-zombies",
   "capsule_id": "lfs-boxboy-zombies",
   "abac_action_id": "capsule.adopted.lfs-boxboy-zombies.launch",
   "iframe_sandbox": "allow-scripts allow-pointer-lock",
   "title": "LFS: BoxBoy Zombies (Bio-Noir Survival)",
   "version": "2.0.0",
+  "rmblyn_channels": [
+    "global",
+    "guild",
+    "party",
+    "trade",
+    "whisper"
+  ],
   "lds_theme_pack_support": [
     "evergreen-dark",
     "evergreen-light",
@@ -72,6 +82,15 @@
     "max_slots": 20,
     "shared_relic_bridge": "lfs-local-abac-v1"
   },
+  "multiplayer": {
+    "dual_mode_host": [
+      "HOST_LOCAL_PC",
+      "HOST_LOCAL_DEVICE",
+      "LAUNCH_U2_HOSTING_SERVICE"
+    ],
+    "hoster_endpoint": "http://127.0.0.1:19448",
+    "multiplayer_bar_element": "oasis-multiplayer-bar"
+  },
   "network_mesh": {
     "tailnet_id": "TNoZe9MmWS11CNTRL",
     "tailnet_domain": "tail420c4d.ts.net",
@@ -81,3 +100,4 @@
     "sovereign_web_host": "https://play.lewisfamilysystems.com"
   }
 }
+

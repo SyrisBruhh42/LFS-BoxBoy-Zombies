@@ -124,14 +124,21 @@ object HordeSteeringEngine {
                         val d = hypot(dx, dy)
 
                         // Separation (close range repulsion)
-                        if (d in 0.05f..minSepDist) {
+                        if (d < minSepDist) {
                             val push = (minSepDist - d) / minSepDist
-                            sepX += (dx / d) * push
-                            sepY += (dy / d) * push
+                            if (d > 0.01f) {
+                                sepX += (dx / d) * push
+                                sepY += (dy / d) * push
+                            } else {
+                                val baseAngle = (self.id xor other.id).toFloat() * 137.5f
+                                val angle = if (self.id < other.id) baseAngle else baseAngle + Math.PI.toFloat()
+                                sepX += cos(angle) * push
+                                sepY += sin(angle) * push
+                            }
                         }
 
                         // Flocking neighborhood (Alignment & Cohesion)
-                        if (d in 0.1f..flockNeighborRadius) {
+                        if (d in 0.01f..flockNeighborRadius) {
                             neighborCount++
                             cohCenterX += other.x
                             cohCenterY += other.y

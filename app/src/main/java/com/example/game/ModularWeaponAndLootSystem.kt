@@ -3,6 +3,7 @@ package com.example.game
 import com.example.data.DEFAULT_WEAPONS
 import com.example.data.WeaponSpec
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -164,17 +165,19 @@ data class ModularWeaponInstance(
 
     val effectiveDamage: Int
         get() {
+            val multiplier = max(0f, 1f + (itemLevel - 1) * 0.14f + anvilUpgradeTier * 0.18f)
             val raw = baseSpec.baseDamage *
                 rarity.statMultiplier *
-                receiver.baseDamageBonus *
+                max(0f, receiver.baseDamageBonus) *
                 magazine.elementalAffinity.bonusDamageMultiplier *
-                (1f + (itemLevel - 1) * 0.14f + anvilUpgradeTier * 0.18f)
+                multiplier
             return raw.roundToInt().coerceAtLeast(10)
         }
 
     val effectiveFireCooldownMs: Long
         get() {
-            val raw = baseSpec.fireCooldownMs / (receiver.fireRateBonus * (1f + anvilUpgradeTier * 0.05f))
+            val denominator = max(0.01f, receiver.fireRateBonus * (1f + anvilUpgradeTier * 0.05f))
+            val raw = baseSpec.fireCooldownMs / denominator
             return raw.toLong().coerceAtLeast(40L)
         }
 

@@ -1,12 +1,14 @@
 package com.example.network
 
 import android.util.Log
+import com.example.game.BoxBoyGameEngine
 import com.example.game.GameSessionState
 import com.example.game.StationKind
 import com.example.game.ZombieArchetype
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +25,7 @@ import kotlin.math.roundToInt
 
 private const val TAG = "KonsoleServer"
 const val KONSOLE_TCP_PORT = 48900
+const val DEFAULT_KONSOLE_TICK_HZ = 20
 
 /**
  * Background TCP Konsole & AI/LLM Stress-Test Server on port 48900.
@@ -40,8 +43,8 @@ class HeadlessKonsoleServer(
 
     private val _konsoleLog = MutableStateFlow(
         listOf(
-            "BOXBOY KONSOLE DAEMON v2.6 READY ON LOOPBACK TCP PORT $KONSOLE_TCP_PORT",
-            "Linux/Terminal Connect: adb forward tcp:$KONSOLE_TCP_PORT tcp:$KONSOLE_TCP_PORT && nc 127.0.0.1 $KONSOLE_TCP_PORT",
+            "BOXBOY KONSOLE DAEMON v2.6 READY ON LOOPBACK TCP PORT $port",
+            "Linux/Terminal Connect: adb forward tcp:$port tcp:$port && nc 127.0.0.1 $port",
             "Type HELP, MAP, STATE, JSON, STRESS 150 300, SPAWN 30 DEVIL_BOSS, or BOT ON."
         )
     )
@@ -61,7 +64,7 @@ class HeadlessKonsoleServer(
                         try {
                             val writer = PrintWriter(client.getOutputStream(), true)
                             val reader = BufferedReader(InputStreamReader(client.getInputStream()))
-                            writer.println("=== BOXBOY ZOMBIES HEADLESS KONSOLE (TCP :$KONSOLE_TCP_PORT) ===")
+                            writer.println("=== BOXBOY ZOMBIES HEADLESS KONSOLE (TCP :$port) ===")
                             writer.println("Type HELP for commands, MAP for ASCII view, JSON for LLM state, QUIT to close.")
                             writer.print("boxboy> ")
                             writer.flush()
@@ -90,7 +93,7 @@ class HeadlessKonsoleServer(
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Konsole TCP server stopped: ${e.message}")
+                runCatching { Log.w(TAG, "Konsole TCP server stopped: ${e.message}") }
             }
         }
     }
@@ -232,6 +235,206 @@ class HeadlessKonsoleServer(
                     }
                 )
             }.toString(2)
+        }
+
+        data class CliLaunchConfig(
+            val port: Int = KONSOLE_TCP_PORT,
+            val tickHz: Int = DEFAULT_KONSOLE_TICK_HZ,
+            val asciiPreview: Boolean = false,
+            val daemonMode: Boolean = false,
+            val warmupTicks: Int = 4
+        ) {
+            val tickIntervalMs: Long
+                get() = (1000L / tickHz.coerceIn(1, 240)).coerceAtLeast(4L)
+        }
+
+        @Volatile
+        var lastCliLaunchConfig: CliLaunchConfig? = null
+            private set
+
+        @Volatile
+        var lastAsciiPreviewOutput: String = ""
+            private set
+
+        @JvmStatic
+        fun parseCliArgs(args: Array<String>): CliLaunchConfig {
+            var port = KONSOLE_TCP_PORT
+            var tickHz = DEFAULT_KONSOLE_TICK_HZ
+            var asciiPreview = false
+            var daemonMode = false
+            var warmupTicks = 4
+
+            var i = 0
+            while (i < args.size) {
+                val token = args[i].trim()
+                when {
+                    token == "--port" && i + 1 < args.size -> {
+                        port = args[i + 1].toIntOrNull()?.coerceIn(1024, 65535) ?: KONSOLE_TCP_PORT
+                        i += 2
+                    }
+                    token.startsWith("--port=") -> {
+                        port = token.substringAfter("=").toIntOrNull()?.coerceIn(1024, 65535) ?: KONSOLE_TCP_PORT
+                        i++
+                    }
+                    token == "--tick-hz" && i + 1 < args.size -> {
+                        tickHz = args[i + 1].toIntOrNull()?.coerceIn(1, 240) ?: DEFAULT_KONSOLE_TICK_HZ
+                        i += 2
+                    }
+                    token.startsWith("--tick-hz=") -> {
+                        tickHz = token.substringAfter("=").toIntOrNull()?.coerceIn(1, 240) ?: DEFAULT_KONSOLE_TICK_HZ
+                        i++
+                    }
+                    token == "--ascii-preview" -> {
+                        asciiPreview = true
+                        i++
+                    }
+                    token == "--daemon" -> {
+                        daemonMode = true
+                        i++
+                    }
+                    token == "--ticks" && i + 1 < args.size -> {
+                        warmupTicks = args[i + 1].toIntOrNull()?.coerceIn(1, 1000) ?: 4
+                        i += 2
+                    }
+                    token.toIntOrNull() != null -> {
+                        port = token.toInt().coerceIn(1024, 65535)
+                        i++
+                    }
+                    else -> i++
+                }
+            }
+            return CliLaunchConfig(
+                port = port,
+                tickHz = tickHz,
+                asciiPreview = asciiPreview,
+                daemonMode = daemonMode,
+                warmupTicks = warmupTicks
+            )
+        }
+
+        @JvmStatic
+        fun createStandaloneCommandDispatcher(
+            engine: BoxBoyGameEngine = BoxBoyGameEngine(),
+            initialState: GameSessionState = GameSessionState(aiBotEnabled = true),
+            tickHz: Int = DEFAULT_KONSOLE_TICK_HZ
+        ): (String) -> String {
+            var currentState = initialState
+            val deltaMs = (1000L / tickHz.coerceIn(1, 240)).coerceAtLeast(4L)
+            return { rawCommand ->
+                val parts = rawCommand.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                val verb = parts.firstOrNull()?.uppercase() ?: "HELP"
+                when (verb) {
+                    "HELP" -> "COMMANDS: HELP | MAP | STATE | JSON | STEP [n] | WAVE <n> | SPAWN <count> [ARCHETYPE] | STRESS <count> <ticks> | BOT ON|OFF | QUIT"
+                    "MAP" -> renderAsciiBunkerMap(currentState)
+                    "STATE", "STATUS" -> "WAVE ${currentState.wave} | HP ${currentState.hp}/${currentState.maxHp} | PTS ${currentState.points} | ZOMBIES ${currentState.zombies.size} | TICK_HZ $tickHz"
+                    "JSON" -> dumpStateJson(currentState)
+                    "STEP" -> {
+                        val steps = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 240) ?: 1
+                        repeat(steps) {
+                            currentState = engine.stepFrame(
+                                state = currentState,
+                                deltaMsRaw = deltaMs,
+                                moveXInput = 0f,
+                                moveYInput = 0f,
+                                isFiringInput = false,
+                                isAltBarrelDropInput = false,
+                                isInteractPressedInput = false,
+                                coopPeerX = null,
+                                coopPeerY = null
+                            )
+                        }
+                        renderAsciiBunkerMap(currentState)
+                    }
+                    "WAVE" -> {
+                        val targetWave = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 999) ?: (currentState.wave + 1)
+                        currentState = currentState.copy(wave = targetWave)
+                        "WAVE SET TO $targetWave"
+                    }
+                    "SPAWN" -> {
+                        val count = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 200) ?: 10
+                        val archName = parts.getOrNull(2)?.uppercase() ?: "SHAMBLER"
+                        val arch = ZombieArchetype.entries.find { it.name == archName } ?: ZombieArchetype.SHAMBLER
+                        currentState = engine.spawnStressZombies(currentState, count, arch)
+                        currentState.statusToast
+                    }
+                    "STRESS" -> {
+                        val count = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 250) ?: 60
+                        val ticks = parts.getOrNull(2)?.toIntOrNull()?.coerceIn(10, 500) ?: 60
+                        val (nextState, report) = engine.runHeadlessBenchmark(currentState, count, ticks)
+                        currentState = nextState
+                        "STRESS COMPLETE: ${report.ticksSimulated} ticks, peak=${report.zombieCountPeak}, maxFps=${report.estimatedMaxFps}"
+                    }
+                    "BOT" -> {
+                        val enabled = parts.getOrNull(1)?.uppercase() != "OFF"
+                        currentState = currentState.copy(aiBotEnabled = enabled)
+                        "AI BOT=${if (enabled) "ON" else "OFF"}"
+                    }
+                    else -> "UNKNOWN COMMAND '$verb'. Type HELP."
+                }
+            }
+        }
+
+        /**
+         * Cross-platform Linux & Windows CLI entrypoint for HeadlessKonsoleServer.
+         * Supports `--port <port>`, `--tick-hz <hz>`, `--ascii-preview`, and `--daemon`.
+         */
+        @JvmStatic
+        fun main(args: Array<String>) {
+            val config = parseCliArgs(args)
+            lastCliLaunchConfig = config
+            val engine = BoxBoyGameEngine()
+            var simState = engine.spawnStressZombies(
+                GameSessionState(aiBotEnabled = true),
+                count = 6,
+                archetype = ZombieArchetype.SHAMBLER
+            )
+            repeat(config.warmupTicks) {
+                simState = engine.stepFrame(
+                    state = simState,
+                    deltaMsRaw = config.tickIntervalMs,
+                    moveXInput = 0f,
+                    moveYInput = 0f,
+                    isFiringInput = false,
+                    isAltBarrelDropInput = false,
+                    isInteractPressedInput = false,
+                    coopPeerX = null,
+                    coopPeerY = null
+                )
+            }
+            val dispatcher = createStandaloneCommandDispatcher(
+                engine = engine,
+                initialState = simState,
+                tickHz = config.tickHz
+            )
+            println("BOXBOY HEADLESS KONSOLE CLI // PORT=${config.port} // TICK_HZ=${config.tickHz}")
+            if (config.asciiPreview) {
+                val preview = dispatcher("MAP")
+                lastAsciiPreviewOutput = preview
+                println(preview)
+            }
+            if (config.daemonMode) {
+                val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                val server = HeadlessKonsoleServer(
+                    scope = scope,
+                    commandDispatcher = dispatcher,
+                    port = config.port
+                )
+                Runtime.getRuntime().addShutdownHook(Thread { server.stopServer() })
+                server.startServer()
+                val reader = BufferedReader(InputStreamReader(System.`in`))
+                var line: String? = reader.readLine()
+                while (line != null) {
+                    val trimmed = line.trim()
+                    if (trimmed.equals("QUIT", ignoreCase = true) || trimmed.equals("EXIT", ignoreCase = true)) {
+                        break
+                    }
+                    if (trimmed.isNotEmpty()) {
+                        println(server.executeAndRecord(trimmed))
+                    }
+                    line = reader.readLine()
+                }
+                server.stopServer()
+            }
         }
     }
 }

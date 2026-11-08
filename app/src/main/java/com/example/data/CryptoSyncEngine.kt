@@ -406,7 +406,7 @@ object CryptoSyncEngine {
 
         val ciphertextSha256 = sha256Hex(ciphertextB64)
         val hmacKey = deriveSharedEnvelopeKey(passphrase).encoded
-        val hmacSig = hmacSha256Hex(hmacKey, "$normalizedSlot:$AEGIS_CAPSULE_ID:$payloadSha256:$ciphertextB64")
+        val hmacSig = hmacSha256Hex(hmacKey, "$roomId|$normalizedSlot|$AEGIS_CAPSULE_ID|$safeGeneration:$payloadSha256:$ciphertextB64")
 
         val g1MagicHeader = true
         val g2SchemaVersion = true
@@ -510,6 +510,8 @@ object CryptoSyncEngine {
             val authTagB64 = extractStringField(envelopeJson, "authTagBase64", "")
                 .ifBlank { extractStringField(envelopeJson, "authTagB64", "") }
                 .ifBlank { extractStringField(envelopeJson, "auth_tag_b64", "") }
+            val providedHmac = extractStringField(envelopeJson, "hmacSignature", "")
+                .ifBlank { extractStringField(envelopeJson, "hmac_signature", "") }
             val cipherMode = extractStringField(envelopeJson, "cipher", "")
                 .ifBlank { extractStringField(envelopeJson, "algorithm", "AES_256_GCM") }
                 .uppercase()
@@ -527,12 +529,24 @@ object CryptoSyncEngine {
             require(generation >= 1) {
                 "G4_MONOTONIC_GENERATION failed: generation must be >= 1 (got $generation)"
             }
-            // Gate 5: AAD Binding (capsule_id + slot_key)
+            // Gate 5: AAD Binding (capsule_id + slot_key + room_id + generation)
             require(capsuleId.isNotBlank() && slotKey.isNotBlank()) {
                 "G5_AAD_BINDING failed: capsule_id='$capsuleId', slot_key='$slotKey'"
             }
             require(extractBooleanField(envelopeJson, "G1_MAGIC_HEADER", true)) {
                 "G1_MAGIC_HEADER flagged false in gates_verified"
+            }
+
+            if (providedHmac.isNotBlank()) {
+                val hmacKey = deriveSharedEnvelopeKey(passphrase).encoded
+                val expectedHmac = hmacSha256Hex(hmacKey, "$roomId|$slotKey|$capsuleId|$generation:$expectedSha256:$ciphertextB64")
+                val hmacMatches = MessageDigest.isEqual(
+                    providedHmac.lowercase().toByteArray(Charsets.UTF_8),
+                    expectedHmac.lowercase().toByteArray(Charsets.UTF_8)
+                )
+                require(hmacMatches) {
+                    "G5_AAD_BINDING failed: HMAC signature mismatch for roomId='$roomId', slotKey='$slotKey', capsuleId='$capsuleId', generation=$generation"
+                }
             }
 
             var rawDecryptedJson: String? = null

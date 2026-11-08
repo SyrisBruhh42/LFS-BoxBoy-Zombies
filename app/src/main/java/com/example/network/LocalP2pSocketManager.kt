@@ -5,6 +5,7 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import com.example.data.CryptoSyncEngine
 import com.example.data.SyncTransportMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,7 @@ private const val TAG = "LocalP2pSocket"
 const val DEFAULT_P2P_TCP_PORT = 48899
 const val DEFAULT_P2P_UDP_PORT = 48898
 const val MAX_REMOTE_PEERS = 3
+const val MAX_PACKET_LENGTH_BYTES = 262_144
 
 enum class LocalP2pRole {
     IDLE,
@@ -321,12 +323,22 @@ class LocalP2pSocketManager(
             statusLog = "Connecting Socket to $cleanHost:$DEFAULT_P2P_TCP_PORT..."
         )
         serverJob = scope.launch(Dispatchers.IO) {
+            var sock: Socket? = null
             try {
-                val sock = Socket()
-                sock.tcpNoDelay = true
-                sock.connect(InetSocketAddress(cleanHost, DEFAULT_P2P_TCP_PORT), 4000)
-                handleConnectedSocket(sock, passphrase, isHostSide = false, isHostRelay = false)
+                val created = Socket()
+                sock = created
+                created.tcpNoDelay = true
+                created.connect(InetSocketAddress(cleanHost, DEFAULT_P2P_TCP_PORT), 4000)
+                if (!isActive) {
+                    runCatching { created.close() }
+                    return@launch
+                }
+                handleConnectedSocket(created, passphrase, isHostSide = false, isHostRelay = false)
+            } catch (ce: CancellationException) {
+                runCatching { sock?.close() }
+                throw ce
             } catch (e: Exception) {
+                runCatching { sock?.close() }
                 Log.w(TAG, "Peer connection failed", e)
                 _sessionStatus.value = _sessionStatus.value.copy(
                     isConnected = false,
@@ -381,7 +393,9 @@ class LocalP2pSocketManager(
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             var line: String? = reader.readLine()
             while (line != null && isActive) {
-                processIncomingPacket(line, passphrase, sourcePeerId = peerId, isHostRelay = isHostRelay)
+                if (line.length <= MAX_PACKET_LENGTH_BYTES) {
+                    processIncomingPacket(line, passphrase, sourcePeerId = peerId, isHostRelay = isHostRelay)
+                }
                 line = reader.readLine()
             }
         } catch (e: Exception) {
@@ -588,12 +602,13 @@ class LocalP2pSocketManager(
         }
     }
 
-    private fun processIncomingPacket(
+    internal fun processIncomingPacket(
         rawLine: String,
         passphrase: String,
         sourcePeerId: String = "peer_default",
         isHostRelay: Boolean = (role == LocalP2pRole.HOST)
     ) {
+        if (rawLine.isEmpty() || rawLine.length > MAX_PACKET_LENGTH_BYTES) return
         try {
             val obj = JSONObject(rawLine)
             val pktType = obj.optString("type")
@@ -619,7 +634,7 @@ class LocalP2pSocketManager(
                     appendMessageToHistory(msg)
                     onTacticalMessageReceived(msg)
                 }
-                "TACTICAL_MSG", "TACTICAL_CALLOUT", "SQUAD_REVIVE_PULSE", "WAVE_SYNC" -> {
+                "TACTICAL_MSG", "TACTICAL_CALLOUT", "TACTICAL_PING", "VOICE_PTT_FRAME", "SQUAD_REVIVE_PULSE", "WAVE_SYNC" -> {
                     val sender = obj.optString("sender", "Co-op Peer")
                     val text = obj.optString("text", pktType)
                     if (text.isNotBlank()) {
@@ -638,7 +653,8 @@ class LocalP2pSocketManager(
                 }
                 "COOP_STATE" -> {
                     val peerName = obj.optString("name", "Player 2")
-                    val peerKey = obj.optString("peerId", sourcePeerId).ifBlank { peerName }
+                    // Bind peerKey strictly to the authenticated socket's sourcePeerId (BB-V4-D00-9bec7126)
+                    val peerKey = sourcePeerId.ifBlank { obj.optString("peerId", peerName).ifBlank { peerName } }
                     val state = CoopPeerState(
                         peerId = peerKey,
                         peerName = peerName,
@@ -724,6 +740,8 @@ class LocalP2pSocketManager(
         private val RELAYABLE_PACKET_TYPES = setOf(
             "TACTICAL_MSG",
             "TACTICAL_CALLOUT",
+            "TACTICAL_PING",
+            "VOICE_PTT_FRAME",
             "SQUAD_REVIVE_PULSE",
             "WAVE_SYNC",
             "COOP_STATE"

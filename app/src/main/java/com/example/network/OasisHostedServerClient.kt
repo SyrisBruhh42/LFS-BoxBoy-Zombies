@@ -574,7 +574,7 @@ class OasisHostedServerClient(
 
         val elapsedMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceIn(1L, 280L)
         val currentRoom = _telemetry.value.activeRoom
-        val newWsUrl = if (targetMode == LfsHostMode.HOST_LOCAL_DEVICE) {
+        val newWsUrl = if (targetMode.isLocalHost) {
             "${cfg.fallbackRelayWsUrl}/host-tunnel/$cleanCode"
         } else {
             "${cfg.syncRelayWsUrl}/room/$cleanCode"
@@ -763,6 +763,7 @@ class OasisHostedServerClient(
         val candidates = buildList {
             if (cfg.customServerUrl.isNotBlank()) add(cfg.customServerUrl.trim().trimEnd('/'))
             if (cfg.tailscaleLaputaHosterUrl.isNotBlank()) add(cfg.tailscaleLaputaHosterUrl.trim().trimEnd('/'))
+            add("http://100.106.12.104:48295")
             if (!lanHostIp.isNullOrBlank() && lanHostIp != "127.0.0.1") add("http://$lanHostIp:19448")
             add("http://10.0.2.2:19448")
             add(cfg.localHosterUrl.trim().trimEnd('/'))
@@ -795,6 +796,7 @@ class OasisHostedServerClient(
      * structure and commits it to Oasis SaveLab custody (`POST $baseUrl/api/lfs/sync/saves` or `/v1/hoster/save`,
      * `slotKey` in `"slot_01".."slot_20"`, `capsuleTarget = "lfs-trash-arcade"`,
      * `cartridgeSlug = "lfs-boxboy-zombies"`, `replicateToAnchor = true`).
+     * Returns [Result.failure] when all SaveLab endpoints fail (`BB-V4-D01-74866ad5`).
      */
     suspend fun commitSaveToOasisCustody(
         slotKey: String,
@@ -827,11 +829,15 @@ class OasisHostedServerClient(
 
         val cfg = _endpointConfig.value
         val candidateUrls = listOf(
+            cfg.customServerUrl.trimEnd('/'),
             cfg.localHosterUrl.trimEnd('/'),
             cfg.tailscaleLaputaHosterUrl.trimEnd('/'),
             cfg.tailscaleAnchorHost.trimEnd('/'),
             cfg.primaryEdgeHost.trimEnd('/')
         ).filter { it.isNotBlank() }.distinct()
+
+        var lastError: Throwable? = null
+        var lastStatusCode: Int? = null
 
         for (baseUrl in candidateUrls) {
             try {
@@ -850,17 +856,24 @@ class OasisHostedServerClient(
                             statusBanner = "Committed 6-Gate aegisEnvelopeV1 [$normalizedSlotKey] (gen #$generation) to Oasis SaveLab"
                         )
                         return@withContext Result.success(envelopeObj)
+                    } else {
+                        lastStatusCode = resp.code
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastError = e
             }
         }
 
         _telemetry.value = _telemetry.value.copy(
             lastCustodySlotKey = normalizedSlotKey,
-            statusBanner = "Sealed 6-Gate aegisEnvelopeV1 [$normalizedSlotKey] (gen #$generation) in Local SaveLab Vault"
+            statusBanner = "SaveLab remote sync unavailable; sealed 6-Gate aegisEnvelopeV1 [$normalizedSlotKey] (gen #$generation) in Local SaveLab Vault"
         )
-        Result.success(envelopeObj)
+        Result.failure(
+            lastError ?: IllegalStateException(
+                "All SaveLab custody endpoints failed for $normalizedSlotKey (last HTTP ${lastStatusCode ?: "unreachable"})"
+            )
+        )
     }
 
     private fun triggerTierBCFailover(
@@ -872,7 +885,7 @@ class OasisHostedServerClient(
         currentWave: Int
     ) {
         val cfg = _endpointConfig.value
-        val fallbackWsUrl = if (hostMode == LfsHostMode.HOST_LOCAL_DEVICE) {
+        val fallbackWsUrl = if (hostMode.isLocalHost) {
             "${cfg.fallbackRelayWsUrl}/host-tunnel/$cleanCode"
         } else {
             "${cfg.syncRelayWsUrl}/room/$cleanCode"
@@ -930,6 +943,7 @@ class OasisHostedServerClient(
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (text.toByteArray(Charsets.UTF_8).size > MAX_WS_FRAME_BYTES) return
                     _telemetry.value = _telemetry.value.copy(
+                        wsReconnectAttempt = 0,
                         wsFramesReceived = _telemetry.value.wsFramesReceived + 1
                     )
                     handleIncomingWireFrame(text, currentPassphrase)
@@ -1024,6 +1038,30 @@ class OasisHostedServerClient(
         return sent
     }
 
+    fun sendVoicePttFrame(frame: VoicePttFramePacket): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!_telemetry.value.isConnectedToLfsEdge) return false
+        val json = frame.toJsonString()
+        if (json.toByteArray(Charsets.UTF_8).size > MAX_WS_FRAME_BYTES) return false
+        val sent = ws.send(json)
+        if (sent) {
+            _telemetry.value = _telemetry.value.copy(wsFramesSent = _telemetry.value.wsFramesSent + 1)
+        }
+        return sent
+    }
+
+    fun sendTacticalPing(ping: TacticalPingPacket): Boolean {
+        val ws = activeWebSocket ?: return false
+        if (!_telemetry.value.isConnectedToLfsEdge) return false
+        val json = ping.toJsonString()
+        if (json.toByteArray(Charsets.UTF_8).size > MAX_WS_FRAME_BYTES) return false
+        val sent = ws.send(json)
+        if (sent) {
+            _telemetry.value = _telemetry.value.copy(wsFramesSent = _telemetry.value.wsFramesSent + 1)
+        }
+        return sent
+    }
+
     /**
      * Dispatches `oasis:overlay-toggle` (`Shift+Tab` / `Ctrl+K`) across the active WebSocket
      * without dropping the party room or 16-Channel Rmblyn Family Chat.
@@ -1084,11 +1122,11 @@ class OasisHostedServerClient(
                     val sync = deserializeHostWorldSyncFrame(obj)
                     onHostWorldSyncReceived(sync)
                 }
-                "TACTICAL_MSG", "RMBLYN_CHAT" -> {
+                "TACTICAL_MSG", "RMBLYN_CHAT", "TACTICAL_PING", "VOICE_PTT_FRAME" -> {
                     val msg = P2pNetworkMessage(
                         packetType = "TACTICAL_MSG",
                         senderTag = obj.optString("sender", "Oasis-Peer"),
-                        content = obj.optString("text", ""),
+                        content = obj.optString("text", obj.optString("calloutText", "")),
                         isOutgoing = false,
                         timestampMs = obj.optLong("ts", System.currentTimeMillis())
                     )
@@ -1286,6 +1324,7 @@ class OasisHostedServerClient(
             add(cfg.localHosterUrl.trim().trimEnd('/'))
             add("http://10.0.2.2:19448")
             if (cfg.tailscaleLaputaHosterUrl.isNotBlank()) add(cfg.tailscaleLaputaHosterUrl.trim().trimEnd('/'))
+            add("http://100.106.12.104:48295")
             if (cfg.tailscaleAnchorHost.isNotBlank()) add(cfg.tailscaleAnchorHost.trim().trimEnd('/'))
             add(cfg.primaryEdgeHost.trim().trimEnd('/'))
             add("https://sync.lewisfamilysystems.com")
@@ -1403,7 +1442,7 @@ class OasisHostedServerClient(
             currentWave: Int = 1,
             hostEpoch: Int = 1
         ): String {
-            val action = if (hostMode == LfsHostMode.HOST_LOCAL_DEVICE) {
+            val action = if (hostMode.isLocalHost) {
                 "register-local-host"
             } else {
                 "launch-u2-service"
@@ -1505,7 +1544,7 @@ class OasisHostedServerClient(
                 .replaceFirst("http://", "ws://")
             val defaultWsPath = when {
                 isU3HosterEndpoint(baseUrl) -> "$wsBase/v1/overlay/ws"
-                hostMode == LfsHostMode.HOST_LOCAL_DEVICE -> "$wsBase/ws/host-tunnel/$cleanCode"
+                hostMode.isLocalHost -> "$wsBase/ws/host-tunnel/$cleanCode"
                 else -> "$wsBase/ws/room/$cleanCode"
             }
 

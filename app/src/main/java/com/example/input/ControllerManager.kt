@@ -240,14 +240,29 @@ object ControllerManager {
      * without 8-way angle snapping or deadzone step-jumps.
      */
     fun filterDpadVector(rawX: Float, rawY: Float): Pair<Float, Float> {
+        if (!rawX.isFinite() || !rawY.isFinite()) return 0f to 0f
+
+        var nx = rawX
+        var ny = rawY
+        var mag = kotlin.math.hypot(nx, ny)
+
+        // Normalize finite, out-of-range vectors
+        if (mag > 1f) {
+            nx /= mag
+            ny /= mag
+            mag = 1f
+        }
+
         val dz = _activeMapping.value.dpadDeadzone.coerceIn(0.02f, 0.35f)
-        val mag = kotlin.math.hypot(rawX, rawY)
         if (mag < dz) return 0f to 0f
-        val linear = ((mag - dz) / (1f - dz)).coerceIn(0f, 1f)
+
+        // Continuous deadzone boundary: subtract deadzone and rescale
+        val linear = (mag - dz) / (1f - dz)
         // Smooth blend (75% linear + 25% cubic) for fine micro-control near center and full speed at rim
         val curvedMag = linear * (0.75f + 0.25f * linear * linear)
+
         val scale = curvedMag / mag
-        return (rawX * scale).coerceIn(-1f, 1f) to (rawY * scale).coerceIn(-1f, 1f)
+        return (nx * scale) to (ny * scale)
     }
 
     // =========================================================================
@@ -297,6 +312,29 @@ object ControllerManager {
     @Volatile var smoothedJoyY: Float = 0f
         private set
 
+    fun clearAllHardwareKeys() {
+        keyWDown = false
+        keySDown = false
+        keyADown = false
+        keyDDown = false
+        keyWReleaseGraceUntilMs = 0L
+        keySReleaseGraceUntilMs = 0L
+        keyAReleaseGraceUntilMs = 0L
+        keyDReleaseGraceUntilMs = 0L
+        keyAimUpDown = false
+        keyAimDownDown = false
+        keyAimLeftDown = false
+        keyAimRightDown = false
+        keyAimUpGraceUntilMs = 0L
+        keyAimDownGraceUntilMs = 0L
+        keyAimLeftGraceUntilMs = 0L
+        keyAimRightGraceUntilMs = 0L
+        hwFireDown = false
+        hwFireGraceUntilMs = 0L
+        smoothedJoyX = 0f
+        smoothedJoyY = 0f
+    }
+
     fun updateTouchJoystick(rawX: Float, rawY: Float) {
         val (fx, fy) = filterDpadVector(rawX, rawY)
         touchJoyX = fx
@@ -306,7 +344,8 @@ object ControllerManager {
 
     /**
      * Window-level hardware key handler invoked from MainActivity.dispatchKeyEvent and Compose onKeyEvent.
-     * Ensures WASD, Arrow keys, Space, E, Q, R, 1, 2 never drop when clicking the canvas or HUD.
+     * Ensures WASD (movement only) is decoupled from Arrow keys (8-way aiming) so retreating with S/A
+     * on Linux/Windows desktops never forces the player to aim backward.
      */
     fun onHardwareKeyEvent(keyCode: Int, isDown: Boolean, eventTimeMs: Long): Boolean {
         val graceUntil = eventTimeMs + KEY_REPEAT_SUSTAIN_MS
@@ -408,13 +447,15 @@ object ControllerManager {
     /**
      * Computes the unified WASD + Touch Virtual Joystick vector and smoothly interpolates
      * [smoothedJoyX] and [smoothedJoyY] so WASD feels like a responsive 360 deg analog stick
-     * without key-repeat micro-stutters.
+     * without key-repeat micro-stutters. Opposing WASD keys (W+S or A+D) cancel to 0f and
+     * diagonal WASD inputs normalize by 1/sqrt(2).
      */
     fun stepAndSampleJoystickVector(nowUptimeMs: Long, dtSec: Float): Pair<Float, Float> {
-        val wActive = keyWDown || nowUptimeMs < keyWReleaseGraceUntilMs
-        val sActive = keySDown || nowUptimeMs < keySReleaseGraceUntilMs
-        val aActive = keyADown || nowUptimeMs < keyAReleaseGraceUntilMs
-        val dActive = keyDDown || nowUptimeMs < keyDReleaseGraceUntilMs
+        val anyPhysicalWasdDown = keyWDown || keySDown || keyADown || keyDDown
+        val wActive = if (anyPhysicalWasdDown) keyWDown else (keyWDown || nowUptimeMs < keyWReleaseGraceUntilMs)
+        val sActive = if (anyPhysicalWasdDown) keySDown else (keySDown || nowUptimeMs < keySReleaseGraceUntilMs)
+        val aActive = if (anyPhysicalWasdDown) keyADown else (keyADown || nowUptimeMs < keyAReleaseGraceUntilMs)
+        val dActive = if (anyPhysicalWasdDown) keyDDown else (keyDDown || nowUptimeMs < keyDReleaseGraceUntilMs)
 
         val kx = (if (dActive) 1f else 0f) - (if (aActive) 1f else 0f)
         val ky = (if (sActive) 1f else 0f) - (if (wActive) 1f else 0f)
@@ -425,7 +466,7 @@ object ControllerManager {
             val len = kotlin.math.hypot(kx, ky)
             targetX = kx / len
             targetY = ky / len
-        } else if (isTouchJoyActive || kotlin.math.hypot(touchJoyX, touchJoyY) > 0.005f) {
+        } else if (!anyPhysicalWasdDown && (isTouchJoyActive || kotlin.math.hypot(touchJoyX, touchJoyY) > 0.005f)) {
             targetX = touchJoyX
             targetY = touchJoyY
         } else {

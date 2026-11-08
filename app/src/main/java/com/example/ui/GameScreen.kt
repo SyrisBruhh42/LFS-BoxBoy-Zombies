@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -153,18 +155,51 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-private class LiveInputState {
+class LiveInputState {
     // Direct World Viewport Mouse/Touch Pointer Aiming (360 deg free-aim on the city canvas)
     @Volatile var pointerAimActive: Boolean = false
     @Volatile var pointerAimAngleRad: Float = 0f
     @Volatile var pointerFireHold: Boolean = false
 
+    @Volatile var keyWDown: Boolean = false
+    @Volatile var keySDown: Boolean = false
+    @Volatile var keyADown: Boolean = false
+    @Volatile var keyDDown: Boolean = false
+    @Volatile var hwHasPriority: Boolean = false
     @Volatile var isFiring: Boolean = false
     @Volatile var isAltBarrelDrop: Boolean = false
     @Volatile var isInteractPressed: Boolean = false
 
-    fun computeMoveVector(nowUptimeMs: Long, dtSec: Float): Pair<Float, Float> {
-        return ControllerManager.stepAndSampleJoystickVector(nowUptimeMs, dtSec)
+    fun computeMoveVector(nowUptimeMs: Long = 0L, dtSec: Float = 0.016f): Pair<Float, Float> {
+        val hwX = (if (keyDDown) 1f else 0f) - (if (keyADown) 1f else 0f)
+        val hwY = (if (keySDown) 1f else 0f) - (if (keyWDown) 1f else 0f)
+        val hwActive = keyWDown || keySDown || keyADown || keyDDown
+        if (hwActive) {
+            hwHasPriority = true
+        }
+        val (cmX, cmY) = ControllerManager.stepAndSampleJoystickVector(nowUptimeMs, dtSec)
+        val cmActive = cmX != 0f || cmY != 0f
+        if (hwHasPriority && hwActive) {
+            return if (hwX != 0f && hwY != 0f) {
+                val invSqrt2 = 0.70710677f
+                Pair(hwX * invSqrt2, hwY * invSqrt2)
+            } else {
+                Pair(hwX, hwY)
+            }
+        }
+        if (cmActive) {
+            hwHasPriority = false
+            return Pair(cmX, cmY)
+        }
+        if (hwActive) {
+            return if (hwX != 0f && hwY != 0f) {
+                val invSqrt2 = 0.70710677f
+                Pair(hwX * invSqrt2, hwY * invSqrt2)
+            } else {
+                Pair(hwX, hwY)
+            }
+        }
+        return Pair(0f, 0f)
     }
 
     fun computeAimOverrideAngleRad(nowUptimeMs: Long): Float? {
@@ -220,7 +255,7 @@ fun GameScreen(
     var isHudDrawerExpanded by remember { mutableStateOf(false) }
     // Floating Touch Pad visibility (can be toggled or auto-hidden when WASD hardware keys are pressed)
     var isTouchPadVisible by remember { mutableStateOf(true) }
-    // Lightweight frame counter read ONLY inside Canvas DrawScope -- zero Composable recompositions at 60 FPS
+    // Lightweight frame counter read ONLY inside Canvas DrawScope -- zero Composable recompositions at 60/120 FPS
     val frameTickState = remember { mutableLongStateOf(0L) }
     val focusRequester = remember { FocusRequester() }
 
@@ -253,20 +288,23 @@ fun GameScreen(
         }
     }
 
-    // 60 FPS deterministic survival game loop + WASD-to-Joystick analog bridge
+    // 120Hz / 60Hz Smooth Display deterministic survival game loop + WASD-to-Joystick analog bridge
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
         var lastFrameMs = withFrameMillis { it }
-        var smoothedDeltaMs = 16.6f
+        var smoothedDeltaMs = 8.333f
+        var subMsRemainder = 0f
         var lastHudSyncMs = 0L
         while (isActive) {
             val nowMs = withFrameMillis { it }
             val rawDelta = (nowMs - lastFrameMs).coerceIn(4L, 40L)
             lastFrameMs = nowMs
-            // Smooth frame delta with EMA to eliminate browser/emulator frame-pacing micro-stutter
+            // Smooth frame delta with EMA to eliminate 120Hz/60Hz quantization micro-stutter
             smoothedDeltaMs = smoothedDeltaMs * 0.80f + rawDelta.toFloat() * 0.20f
-            val stepMs = smoothedDeltaMs.roundToInt().toLong().coerceIn(8L, 28L)
-            val dtSec = stepMs / 1000f
+            val exactMs = (smoothedDeltaMs + subMsRemainder).coerceIn(4f, 33f)
+            val stepMs = exactMs.roundToInt().toLong().coerceIn(4L, 28L)
+            subMsRemainder = (exactMs - stepMs.toFloat()).coerceIn(-0.5f, 0.5f)
+            val dtSec = (smoothedDeltaMs / 1000f).coerceIn(0.004f, 0.033f)
             val uptimeMs = SystemClock.uptimeMillis()
 
             // Consume window-level one-shot triggers from ControllerManager & LiveInputState
@@ -378,6 +416,10 @@ fun GameScreen(
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    LaunchedEffect(context) {
+        BioNoirSpriteAtlasRegistry.ensureInitialized(context)
+    }
+
     MyApplicationTheme(accessibilityState = controllerConfig.toAccessibilityThemeState()) {
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -427,6 +469,7 @@ fun GameScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .windowInsetsPadding(WindowInsets.displayCutout)
         ) {
             val isTvCastMode = controllerConfig.displayMode == DisplayScreenMode.TV_CAST_CINEMATIC
 
@@ -2531,7 +2574,7 @@ private fun MappedArcadeButton(
     }
 }
 
-private fun handleHardwareGamepadEvent(
+internal fun handleHardwareGamepadEvent(
     keyCode: Int,
     isDown: Boolean,
     config: ControllerConfigState,
@@ -2540,10 +2583,28 @@ private fun handleHardwareGamepadEvent(
     onCycleWeapon: (Int) -> Unit
 ): Boolean {
     val nowMs = SystemClock.uptimeMillis()
-    if (ControllerManager.onHardwareKeyEvent(keyCode, isDown, nowMs)) {
-        return true
-    }
+    val cmHandled = ControllerManager.onHardwareKeyEvent(keyCode, isDown, nowMs)
     return when (keyCode) {
+        config.keyUp -> {
+            liveInput.keyWDown = isDown
+            if (isDown) liveInput.hwHasPriority = true
+            true
+        }
+        config.keyDown -> {
+            liveInput.keySDown = isDown
+            if (isDown) liveInput.hwHasPriority = true
+            true
+        }
+        config.keyLeft -> {
+            liveInput.keyADown = isDown
+            if (isDown) liveInput.hwHasPriority = true
+            true
+        }
+        config.keyRight -> {
+            liveInput.keyDDown = isDown
+            if (isDown) liveInput.hwHasPriority = true
+            true
+        }
         config.keyFire -> {
             liveInput.isFiring = isDown
             true
@@ -2568,6 +2629,6 @@ private fun handleHardwareGamepadEvent(
             if (isDown) onCycleWeapon(1)
             true
         }
-        else -> false
+        else -> cmHandled
     }
 }

@@ -89,16 +89,19 @@ class RetroMusicController(private val appContext: Context) {
     }
 
     fun setPlaybackSpeed(speedMultiplier: Float) {
+        if (!speedMultiplier.isFinite()) return
         val clamped = speedMultiplier.coerceIn(0.75f, 1.35f)
-        if ( kotlin.math.abs(clamped - currentSpeedRate) < 0.04f) return
+        if (kotlin.math.abs(clamped - currentSpeedRate) < 0.04f) return
         currentSpeedRate = clamped
         val player = mediaPlayer ?: return
         if (!isPrepared) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && player.isPlaying) {
             try {
                 player.playbackParams = player.playbackParams.setSpeed(clamped)
+                applyVolumeOnly()
             } catch (_: Exception) {
                 // Ignore if device codec rejects dynamic rate change
+                applyVolumeOnly()
             }
         }
     }

@@ -196,10 +196,29 @@ enum class LfsHostMode(val wireId: String, val label: String, val subtitle: Stri
         "HOST_LOCAL_DEVICE",
         "Host From My Desk",
         "Your device leads the game and bridges family rooms instantly"
+    ),
+    HOST_LOCAL_PC(
+        "HOST_LOCAL_PC",
+        "Host From My Desk",
+        "Local PC or companion device leads the game and bridges family rooms instantly"
     );
 
     val title: String get() = label
     val shortTitle: String get() = label
+    val isLocalHost: Boolean get() = this == HOST_LOCAL_DEVICE || this == HOST_LOCAL_PC
+
+    companion object {
+        fun fromWireValue(raw: String?): LfsHostMode {
+            val normalized = raw?.trim()?.uppercase().orEmpty()
+            return when (normalized) {
+                "HOST_LOCAL_PC" -> HOST_LOCAL_PC
+                "HOST_LOCAL_DEVICE", "HOST-02" -> HOST_LOCAL_DEVICE
+                "LAUNCH_U2_HOSTING_SERVICE", "HOST-01" -> LAUNCH_U2_HOSTING_SERVICE
+                else -> entries.find { it.wireId.equals(normalized, ignoreCase = true) }
+                    ?: LAUNCH_U2_HOSTING_SERVICE
+            }
+        }
+    }
 }
 
 enum class LfsLifecyclePolicy(val wireId: String, val label: String) {
@@ -543,10 +562,27 @@ enum class OasisWingDestination(
     val displayTitle: String get() = displayName
 }
 
+val CANONICAL_RMBLYN_CHANNELS: List<String> = listOf("global", "guild", "party", "trade", "whisper")
+
+enum class RmblynChannel(val wireId: String, val badgeLabel: String, val description: String) {
+    GLOBAL("global", "#global", "Cross-capsule Oasis sanctuary broadcast"),
+    GUILD("guild", "#guild", "Family & clan tactical coordination"),
+    PARTY("party", "#party", "Active 4-player co-op squad channel"),
+    TRADE("trade", "#trade", "Wonder Relics, Modular Weapons & Starlight Rupee exchange"),
+    WHISPER("whisper", "@whisper", "Direct companion (@willow, @cinder, @mote) & peer whisper");
+
+    companion object {
+        fun fromWireId(raw: String?): RmblynChannel {
+            val clean = raw?.trim()?.removePrefix("#")?.removePrefix("@")?.lowercase().orEmpty()
+            return entries.find { it.wireId == clean } ?: PARTY
+        }
+    }
+}
+
 @Keep
 data class RmblynChatMessage(
     val id: String,
-    val channelId: String = "arcade-lounge",
+    val channelId: String = "party",
     val senderHandle: String,
     val messageText: String,
     val timestampMs: Long = System.currentTimeMillis(),

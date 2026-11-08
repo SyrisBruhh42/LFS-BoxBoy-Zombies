@@ -2,11 +2,18 @@
 (function (global) {
   "use strict";
   const CHANNEL_PREFIX = "lfs-oasis-chat-overlay-v1";
+  const CANONICAL_RMBLYN_CHANNELS = ["global", "guild", "party", "trade", "whisper"];
   const stateStore = {
+    portfolioId: "PF-18",
+    capsuleCode: "OASIS-BBZM",
+    schemaCompat: "cp12-capsule-manifest-v2",
     roomCode: "OASIS-LOCAL",
     hostMode: "HOST_LOCAL_PC",
     overlayOpen: false,
+    pttActive: false,
     multiplayerConfig: null,
+    activeRmblynChannel: "party",
+    rmblynChannels: CANONICAL_RMBLYN_CHANNELS.slice(),
     chatChannel: "#party:default:OASIS-LOCAL"
   };
 
@@ -19,6 +26,8 @@
           '<span class="oasis-room-pill">Room: ' + stateStore.roomCode + '</span>' +
           '<button type="button" data-action="host-local">HOST_LOCAL_PC</button>' +
           '<button type="button" data-action="host-u2">LAUNCH_U2_HOSTING_SERVICE</button>' +
+          '<button type="button" data-action="ptt-talk">[PTT: TALK]</button>' +
+          '<button type="button" data-action="tactical-ping">[PING]</button>' +
           '<button type="button" data-action="toggle-overlay">Shift+Tab Overlay</button>' +
           '</div>';
       }
@@ -48,15 +57,29 @@
   }
 
   global.OasisSyncSDK = {
-    version: "cp12-v1",
+    version: "cp12-v2",
+    portfolioId: "PF-18",
+    capsuleCode: "OASIS-BBZM",
+    rmblynChannels: CANONICAL_RMBLYN_CHANNELS.slice(),
     enableSimplifiedMultiplayer: function (config) {
       stateStore.multiplayerConfig = Object.assign({ mode: "state-sync", tickHz: 30 }, config || {});
       return {
         status: "ENABLED",
         mode: stateStore.multiplayerConfig.mode,
         roomCode: stateStore.roomCode,
-        hostMode: stateStore.hostMode
+        hostMode: stateStore.hostMode,
+        rmblynChannels: CANONICAL_RMBLYN_CHANNELS.slice()
       };
+    },
+    selectRmblynChannel: function (channelId) {
+      const clean = String(channelId || "party").trim().toLowerCase().replace(/^#/, "");
+      stateStore.activeRmblynChannel = CANONICAL_RMBLYN_CHANNELS.indexOf(clean) >= 0 ? clean : "party";
+      stateStore.chatChannel = "#" + stateStore.activeRmblynChannel + ":default:" + stateStore.roomCode;
+      return stateStore.activeRmblynChannel;
+    },
+    toggleVoicePtt: function () {
+      stateStore.pttActive = !stateStore.pttActive;
+      return { pttActive: stateStore.pttActive, channel: stateStore.activeRmblynChannel };
     },
     spawnBot: function (spec) {
       return {
@@ -73,8 +96,11 @@
   };
 
   global.OasisCapsuleSDK = {
-    version: "cp12-v1",
+    version: "cp12-v2",
+    portfolioId: "PF-18",
+    capsuleCode: "OASIS-BBZM",
     channelPrefix: CHANNEL_PREFIX,
+    rmblynChannels: CANONICAL_RMBLYN_CHANNELS.slice(),
     ai: {
       complete: async function (prompt) {
         return { ok: true, tier: 0, text: String(prompt || "").slice(0, 240) };
@@ -85,3 +111,4 @@
     }
   };
 })(typeof window !== "undefined" ? window : globalThis);
+

@@ -26,8 +26,95 @@ data class AiSectorBlueprintProposal(
 )
 
 object LocalOllamaMapDirector {
+    const val DEFAULT_FORGE_NEURAL_ENDPOINT = "http://127.0.0.1:19447/v1/neural/infer"
     const val DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434/api/generate"
     const val DEFAULT_LOCAL_MODEL = "gemma4:e4b-it-q4_K_M"
+
+    @Volatile
+    var lastPrefetchedSectorJson: String? = null
+
+    @Volatile
+    var lastPrefetchedVendingJson: String? = null
+
+    /**
+     * Queries Sovereign Forge (`:19447/v1/neural/infer`) or Local Ollama (`:11434/api/generate`)
+     * on a background daemon thread with a 450ms connect/read timeout so the 60fps loop never blocks.
+     */
+    fun prefetchSectorAsync(
+        wave: Int,
+        biomeTag: String,
+        seed: Long,
+        endpointUrl: String = DEFAULT_FORGE_NEURAL_ENDPOINT
+    ) {
+        val prompt = buildOllamaSectorPrompt(wave, biomeTag, seed)
+        val worker = Thread({
+            val forgeResp = queryEndpointBounded(
+                url = endpointUrl,
+                payloadJson = JSONObject()
+                    .put("prompt", prompt)
+                    .put("model", DEFAULT_LOCAL_MODEL)
+                    .put("task_domain", "tactical_director")
+                    .put("stream", false)
+                    .toString()
+            ) ?: if (endpointUrl != DEFAULT_OLLAMA_ENDPOINT) {
+                queryEndpointBounded(
+                    url = DEFAULT_OLLAMA_ENDPOINT,
+                    payloadJson = JSONObject()
+                        .put("model", DEFAULT_LOCAL_MODEL)
+                        .put("prompt", prompt)
+                        .put("stream", false)
+                        .toString()
+                )
+            } else {
+                null
+            }
+            if (!forgeResp.isNullOrBlank()) {
+                lastPrefetchedSectorJson = forgeResp
+            }
+        }, "BoxBoys-Forge-SectorPrefetch")
+        worker.isDaemon = true
+        worker.start()
+    }
+
+    private fun queryEndpointBounded(url: String, payloadJson: String, timeoutMs: Int = 450): String? {
+        return try {
+            val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+            }
+            conn.outputStream.use { os ->
+                os.write(payloadJson.toByteArray(Charsets.UTF_8))
+            }
+            val code = conn.responseCode
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                null
+            }
+            conn.disconnect()
+            if (!body.isNullOrBlank()) {
+                try {
+                    val parsed = JSONObject(body)
+                    when {
+                        parsed.has("rows") -> body
+                        parsed.has("response") -> parsed.optString("response").trim().takeIf { it.isNotEmpty() }
+                        parsed.has("text") -> parsed.optString("text").trim().takeIf { it.isNotEmpty() }
+                        else -> body
+                    }
+                } catch (_: Exception) {
+                    body
+                }
+            } else {
+                null
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     /**
      * Builds the structured JSON prompt for Local Ollama (`gemma4:e4b-it-q4_K_M` / `qwen2.5-coder:3b`)
@@ -62,7 +149,7 @@ object LocalOllamaMapDirector {
                 val rowsArr = obj.optJSONArray("rows")
                 if (rowsArr != null && rowsArr.length() == 12) {
                     val rows = (0 until 12).map { idx ->
-                        rowsArr.getString(idx).padEnd(12, '#').take(12)
+                        rowsArr.getString(idx)
                     }
                     if (validateRoomRows(rows)) {
                         val compId = obj.optString("componentId", "boxboys.ai.sector_${abs(seed) % 10000}")
@@ -161,16 +248,46 @@ object LocalOllamaMapDirector {
 
     fun validateRoomRows(rows: List<String>): Boolean {
         if (rows.size != 12 || rows.any { it.length != 12 }) return false
+        val validChars = setOf('#', '.', 'W', 'D', 'V', 'P', 'B', 'U')
+        if (rows.any { r -> r.any { ch -> ch !in validChars } }) return false
         val walkableCount = rows.sumOf { r -> r.count { ch -> ch in ".VPUDB" } }
-        val hasDoor = rows.any { r -> r.contains('D') }
+        val interiorChars = setOf('.', 'V', 'P', 'B', 'U')
+        val hasConnectedBorderDoor =
+            (1 until 11).any { x -> rows[0][x] == 'D' && rows[1][x] in interiorChars } ||
+                (1 until 11).any { x -> rows[11][x] == 'D' && rows[10][x] in interiorChars } ||
+                (1 until 11).any { y -> rows[y][0] == 'D' && rows[y][1] in interiorChars } ||
+                (1 until 11).any { y -> rows[y][11] == 'D' && rows[y][10] in interiorChars }
         val hasWindow = rows.any { r -> r.contains('W') }
-        return walkableCount >= 36 && hasDoor && hasWindow
+        return walkableCount >= 36 && hasConnectedBorderDoor && hasWindow
     }
 
-    private fun extractSocketsFromRows(rows: List<String>, wave: Int): List<RoomSocketSpec> {
+    fun extractSocketsFromRows(rows: List<String>, wave: Int): List<RoomSocketSpec> {
         val baseCost = (750 + (wave - 1) * 150).coerceAtMost(3500)
-        return ElonaSocketFrontierEngine.DEFAULT_COMPONENT_CATALOG.first().sockets.map {
-            it.copy(unlockCostCurrency = baseCost)
-        }
+        val hasNorthDoor = rows.firstOrNull()?.contains('D') == true
+        val hasSouthDoor = rows.lastOrNull()?.contains('D') == true
+        val hasWestDoor = rows.any { it.firstOrNull() == 'D' }
+        val hasEastDoor = rows.any { it.lastOrNull() == 'D' }
+        return listOf(
+            RoomSocketSpec(
+                SocketDirection.NORTH,
+                if (hasNorthDoor) SocketKind.LOCKED_DEBRIS_DOOR else SocketKind.WALL,
+                unlockCostCurrency = baseCost
+            ),
+            RoomSocketSpec(
+                SocketDirection.EAST,
+                if (hasEastDoor) SocketKind.LOCKED_DEBRIS_DOOR else SocketKind.WALL,
+                unlockCostCurrency = baseCost
+            ),
+            RoomSocketSpec(
+                SocketDirection.SOUTH,
+                if (hasSouthDoor) SocketKind.LOCKED_DEBRIS_DOOR else SocketKind.WALL,
+                unlockCostCurrency = baseCost
+            ),
+            RoomSocketSpec(
+                SocketDirection.WEST,
+                if (hasWestDoor) SocketKind.LOCKED_DEBRIS_DOOR else SocketKind.WALL,
+                unlockCostCurrency = baseCost
+            )
+        )
     }
 }

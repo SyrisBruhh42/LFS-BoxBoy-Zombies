@@ -1,0 +1,80 @@
+; Engine configuration file.
+; Generated for LFS Oasis BoxBoy Zombies (Godot 4.7.2 Hybrid Architecture).
+
+config_version=5
+
+[application]
+
+config/name="BoxBoy Zombies: Sovereign Arena"
+config/description="3/4 Orthographic Co-Op Undead Survival Arena (Godot 4.7.2 + Pixel 8 Pro 120Hz + Linux/Windows)"
+run/main_scene="res://scenes/BoxBoyArenaMain.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility", "Mobile")
+config/version="2.0.0-cp12"
+
+[audio]
+
+driver/driver="PulseAudio"
+buses/default_bus_layout=""
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/size/resizable=true
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=6
+window/vsync/vsync_mode=1
+
+[input]
+
+move_left={
+"deadzone": 0.15,
+"events": []
+}
+move_right={
+"deadzone": 0.15,
+"events": []
+}
+move_up={
+"deadzone": 0.15,
+"events": []
+}
+move_down={
+"deadzone": 0.15,
+"events": []
+}
+fire_primary={
+"deadzone": 0.2,
+"events": []
+}
+tactical_dash={
+"deadzone": 0.2,
+"events": []
+}
+interact_station={
+"deadzone": 0.2,
+"events": []
+}
+reload_weapon={
+"deadzone": 0.2,
+"events": []
+}
+squad_ptt={
+"deadzone": 0.2,
+"events": []
+}
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=false
+pointing/emulate_mouse_from_touch=false
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+renderer/rendering_method.web="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
+anti_aliasing/quality/msaa_2d=1
+environment/defaults/default_clear_color=Color(0.02, 0.031, 0.024, 1)

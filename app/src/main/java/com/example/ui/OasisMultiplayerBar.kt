@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.example.ui
 
 import android.content.Intent
@@ -46,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,13 +65,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.CANONICAL_RMBLYN_CHANNELS
 import com.example.data.FriendlyGuideCardState
 import com.example.data.OasisImagineeringTranslator
 import com.example.data.OasisWingDestination
+import com.example.data.RmblynChannel
 import com.example.data.RmblynChatMessage
 import com.example.data.SanctuaryStorytellerState
 import com.example.data.Zt9ComfortOverridesState
 import com.example.network.OasisSessionStatus
+import com.example.network.RmblynFiveChannelRouter
+import com.example.network.SquadVoicePttAndPingEngine
+import com.example.network.TacticalPingCallout
+import com.example.network.VoicePttTelemetryState
 import com.example.ui.theme.AetherCyan
 import com.example.ui.theme.AstralObsidian
 import com.example.ui.theme.AstralSurface
@@ -85,10 +94,12 @@ import com.example.ui.theme.PhosphorGreen
 /**
  * Uninterrupted Top Shell Ribbon (`OasisMultiplayerBar`) that remains mounted across
  * Title Hub, active gameplay, modals, and Wing switches without ever dropping the active
- * party room (`OASIS-XXXX`) or 16-Channel Rmblyn Family Chat (`@willow`, `@cinder`, `@mote`).
+ * party room (`OASIS-XXXX`) or 5-Channel Rmblyn Family Chat (`global`, `guild`, `party`, `trade`, `whisper`).
  *
- * Includes the compact AudioBookshelf & OpenAudible "Sanctuary Storyteller" pill (`cb64f9e7`)
- * with Play/Pause, Chapter title, and 15m/30m/45m Starlight Sleep-Fade timer.
+ * Includes:
+ * - Interactive `[PTT: TALK]` button with live 4-bar dB waveform meter (`VOICE_PTT_FRAME`)
+ * - 1-tap `[PING]` 6-callout tactical quickchat row
+ * - Compact AudioBookshelf & OpenAudible "Sanctuary Storyteller" pill (`cb64f9e7`)
  */
 @Composable
 fun OasisMultiplayerBar(
@@ -102,13 +113,23 @@ fun OasisMultiplayerBar(
     onCycleStorytellerChapter: () -> Unit,
     onCycleSleepTimer: () -> Unit,
     onOpenWingSwitcher: () -> Unit,
-    onOpenFamilyRoomModal: () -> Unit
+    onOpenFamilyRoomModal: () -> Unit,
+    voiceTelemetry: VoicePttTelemetryState? = null,
+    activeRmblynChannel: String? = null,
+    onToggleVoicePtt: () -> Unit = { SquadVoicePttAndPingEngine.triggerSharedToggleVoicePtt() },
+    onSendTacticalPing: (TacticalPingCallout) -> Unit = { SquadVoicePttAndPingEngine.triggerSharedTacticalPing(it) },
+    onSelectRmblynChannel: (String) -> Unit = { SquadVoicePttAndPingEngine.triggerSharedSelectRmblynChannel(it) }
 ) {
     val a11y = LocalAccessibilityTheme.current
+    val sharedVoice by SquadVoicePttAndPingEngine.sharedTelemetry.collectAsState()
+    val sharedChannel by SquadVoicePttAndPingEngine.sharedActiveChannel.collectAsState()
+    val effectiveVoice = voiceTelemetry ?: sharedVoice
+    val effectiveChannel = RmblynFiveChannelRouter.normalizeChannelId(activeRmblynChannel ?: sharedChannel)
+    var isPingRowExpanded by remember { mutableStateOf(false) }
     val partyCode = OasisImagineeringTranslator.formatPartyRoomBadge(oasisStatus.roomCode)
     val hearthBadge = oasisStatus.tailscaleHandshake.tailscaleTunnelBadge
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (a11y.highContrastMode) HighContrastBlack else AstralObsidian)
@@ -116,6 +137,10 @@ fun OasisMultiplayerBar(
                 width = 1.dp,
                 color = if (a11y.highContrastMode) HighContrastYellow else ChampagneGold.copy(alpha = 0.45f)
             )
+    ) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 3.dp)
             .horizontalScroll(rememberScrollState())
             .testTag("oasis_multiplayer_shell_ribbon"),
@@ -307,6 +332,155 @@ fun OasisMultiplayerBar(
                 )
             }
         }
+
+        // 6. Squad Voice [PTT: TALK] with live 4-bar dB waveform meter + [PING] quickchat toggle
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier
+                    .background(
+                        if (effectiveVoice.isPttActive) PhosphorGreen else HandheldObsidian,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .border(
+                        1.dp,
+                        if (effectiveVoice.isPttActive) ChampagneGold else PhosphorGreen.copy(alpha = 0.75f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .clickable(onClick = onToggleVoicePtt)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("oasis_ribbon_ptt_talk_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = if (effectiveVoice.isPttActive) "[PTT: LIVE]" else "[PTT: TALK]",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (effectiveVoice.isPttActive) HandheldObsidian else PhosphorGreen,
+                    fontWeight = FontWeight.Bold
+                )
+                // 4-bar dB waveform meter
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.Bottom,
+                    modifier = Modifier.height(12.dp).testTag("oasis_ribbon_ptt_db_meter")
+                ) {
+                    effectiveVoice.waveformBars.take(4).forEach { barLevel ->
+                        val clamped = barLevel.coerceIn(0.15f, 1.0f)
+                        Box(
+                            modifier = Modifier
+                                .width(3.dp)
+                                .height((12f * clamped).dp)
+                                .background(
+                                    if (effectiveVoice.isPttActive) HandheldObsidian else AetherCyan,
+                                    RoundedCornerShape(1.dp)
+                                )
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .background(
+                        if (isPingRowExpanded) MysteryGold else HandheldObsidian,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .border(1.dp, MysteryGold.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                    .clickable { isPingRowExpanded = !isPingRowExpanded }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("oasis_ribbon_ping_toggle_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "[PING: #${effectiveChannel.uppercase()}]",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isPingRowExpanded) HandheldObsidian else MysteryGold,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+
+    if (isPingRowExpanded) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(HandheldObsidian.copy(alpha = 0.96f))
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .testTag("oasis_ribbon_expanded_comms_panel"),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Canonical 5-channel Rmblyn selector pills (RATCHET-8: global, guild, party, trade, whisper)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "RMBLYN CHANNELS:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ChampagneGold,
+                    fontWeight = FontWeight.Bold
+                )
+                CANONICAL_RMBLYN_CHANNELS.forEach { channelId ->
+                    val isSelected = effectiveChannel.equals(channelId, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                if (isSelected) PhosphorGreen else HandheldChassis,
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (isSelected) ChampagneGold else PhosphorGreen.copy(alpha = 0.5f),
+                                RoundedCornerShape(6.dp)
+                            )
+                            .clickable { onSelectRmblynChannel(channelId) }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .testTag("oasis_ribbon_channel_pill_$channelId")
+                    ) {
+                        Text(
+                            text = "#${channelId.uppercase()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSelected) HandheldObsidian else PhosphorGreen,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // 6-sector Tactical Ping Callout row
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                TacticalPingCallout.entries.forEach { callout ->
+                    Box(
+                        modifier = Modifier
+                            .background(HandheldChassis, RoundedCornerShape(6.dp))
+                            .border(1.dp, AetherCyan.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                            .clickable { onSendTacticalPing(callout) }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag("oasis_ribbon_ping_${callout.calloutId.lowercase()}")
+                    ) {
+                        Text(
+                            text = "${callout.badgeCode}: ${callout.shortLabel}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AetherCyan,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
     }
 }
 
@@ -412,12 +586,21 @@ fun OasisUniversalOverlayDialog(
     onSetSleepTimerMinutes: (Int) -> Unit,
     onRefreshStorytellerLibrary: () -> Unit,
     onProbeHearthKeyHandshake: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    activeRmblynChannel: String? = null,
+    voiceTelemetry: VoicePttTelemetryState? = null,
+    onSelectRmblynChannel: (String) -> Unit = { SquadVoicePttAndPingEngine.triggerSharedSelectRmblynChannel(it) },
+    onToggleVoicePtt: () -> Unit = { SquadVoicePttAndPingEngine.triggerSharedToggleVoicePtt() },
+    onSendTacticalPing: (TacticalPingCallout) -> Unit = { SquadVoicePttAndPingEngine.triggerSharedTacticalPing(it) }
 ) {
     val context = LocalContext.current
     var chatDraft by remember { mutableStateOf("") }
     val partyCode = OasisImagineeringTranslator.formatPartyRoomBadge(oasisStatus.roomCode)
     val sso = oasisStatus.tailscaleHandshake
+    val sharedVoice by SquadVoicePttAndPingEngine.sharedTelemetry.collectAsState()
+    val sharedChannel by SquadVoicePttAndPingEngine.sharedActiveChannel.collectAsState()
+    val effectiveVoice = voiceTelemetry ?: sharedVoice
+    val effectiveChannel = activeRmblynChannel ?: sharedChannel
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -654,7 +837,7 @@ fun OasisUniversalOverlayDialog(
                     }
                 }
 
-                // 3. 16-Channel Rmblyn Family Chat (@willow, @cinder, @mote)
+                // 3. Canonical 5-Channel Rmblyn Family Chat + Squad Voice PTT & Tactical Pings
                 Card(
                     colors = CardDefaults.cardColors(containerColor = HandheldObsidian),
                     modifier = Modifier
@@ -665,12 +848,93 @@ fun OasisUniversalOverlayDialog(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "16-CHANNEL RMBLYN FAMILY CHAT (ARCADE-LOUNGE | @willow @cinder @mote)",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = PhosphorGreen,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "RMBLYN 5-CHANNEL SQUAD COMMS (#${effectiveChannel.uppercase()} | @willow @cinder @mote)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = PhosphorGreen,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Voice Mode: ${effectiveVoice.modeLabel} | Last Callout: ${effectiveVoice.lastCalloutBadge} (${effectiveVoice.framesTransmitted} frames)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AetherCyan
+                                )
+                            }
+                            Button(
+                                onClick = onToggleVoicePtt,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (effectiveVoice.isPttActive) ChampagneGold else PhosphorGreen,
+                                    contentColor = HandheldObsidian
+                                ),
+                                modifier = Modifier.testTag("overlay_ptt_talk_button")
+                            ) {
+                                Text(
+                                    text = if (effectiveVoice.isPttActive) "[PTT: LIVE]" else "[PTT: TALK]",
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    verticalAlignment = Alignment.Bottom,
+                                    modifier = Modifier.height(12.dp)
+                                ) {
+                                    effectiveVoice.waveformBars.take(4).forEach { barLevel ->
+                                        Box(
+                                            modifier = Modifier
+                                                .width(3.dp)
+                                                .height((12f * barLevel.coerceIn(0.15f, 1.0f)).dp)
+                                                .background(HandheldObsidian, RoundedCornerShape(1.dp))
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Canonical 5 Rmblyn Channel Selector Pills (RATCHET-8: global, guild, party, trade, whisper)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            CANONICAL_RMBLYN_CHANNELS.forEach { channelId ->
+                                FilterChip(
+                                    selected = effectiveChannel.equals(channelId, ignoreCase = true),
+                                    onClick = { onSelectRmblynChannel(channelId) },
+                                    label = { Text("#${channelId.uppercase()}") },
+                                    modifier = Modifier.testTag("rmblyn_channel_chip_$channelId")
+                                )
+                            }
+                        }
+
+                        // 6-Sector Tactical Ping Quickchat Row
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            TacticalPingCallout.entries.forEach { callout ->
+                                OutlinedButton(
+                                    onClick = { onSendTacticalPing(callout) },
+                                    modifier = Modifier.testTag("overlay_ping_button_${callout.calloutId.lowercase()}")
+                                ) {
+                                    Text(
+                                        text = "${callout.badgeCode}: ${callout.shortLabel}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AetherCyan
+                                    )
+                                }
+                            }
+                        }
+
+                        val channelMessages = rmblynMessages.filter {
+                            it.channelId.equals(effectiveChannel, ignoreCase = true) ||
+                                (effectiveChannel.equals("party", ignoreCase = true) && it.channelId == "arcade-lounge")
+                        }.ifEmpty { rmblynMessages }
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -678,9 +942,9 @@ fun OasisUniversalOverlayDialog(
                                 .padding(8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            rmblynMessages.takeLast(5).forEach { msg ->
+                            channelMessages.takeLast(6).forEach { msg ->
                                 Text(
-                                    text = "[${msg.senderHandle}]: ${msg.messageText}",
+                                    text = "[#${msg.channelId}] [${msg.senderHandle}]: ${msg.messageText}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (msg.isCompanionBot) AetherCyan else ChampagneGold
                                 )
@@ -694,7 +958,7 @@ fun OasisUniversalOverlayDialog(
                             OutlinedTextField(
                                 value = chatDraft,
                                 onValueChange = { chatDraft = it },
-                                label = { Text("Send message to Family Room & @willow / @cinder / @mote") },
+                                label = { Text("Send to #${effectiveChannel.uppercase()} & @willow / @cinder / @mote") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )

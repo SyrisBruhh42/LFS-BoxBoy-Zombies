@@ -51,6 +51,37 @@ fun Ror2PassiveRelicSystem.computeCrowbarMultiplier(
 fun Ror2PassiveRelicSystem.computeCritChanceBonus(state: PassiveRelicStackState): Float =
     (0.05f * state.countOf(PassiveRelicKind.HARVESTERS_SCYTHE)).coerceAtMost(0.65f)
 
+data class EffectiveWeaponStats(
+    val level: Int,
+    val damage: Int,
+    val magCapacity: Int,
+    val pierceCount: Int,
+    val reloadTimeMultiplier: Float,
+    val fireCooldownMultiplier: Float
+)
+
+fun WeaponUpgradeProgression.computeEffectiveStats(
+    weapon: WeaponSpec,
+    level: Int,
+    modWeapon: ModularWeaponInstance? = null
+): EffectiveWeaponStats {
+    val tier = getTierStats(level)
+    val baseMag = modWeapon?.effectiveMagSize ?: weapon.magazineSize
+    return EffectiveWeaponStats(
+        level = tier.level,
+        damage = calculateEffectiveDamage(weapon.baseDamage, level),
+        magCapacity = (baseMag + tier.bonusMagCapacity).coerceAtLeast(4),
+        pierceCount = calculateEffectivePierce(weapon.pierceCount, level),
+        reloadTimeMultiplier = tier.reloadTimeMultiplier,
+        fireCooldownMultiplier = tier.fireCooldownMultiplier
+    )
+}
+
+fun BoxBoysLiveSubsystemBridge.evaluateAllSubsystems(
+    input: com.example.game.contracts.LiveSubsystemTickInput = com.example.game.contracts.LiveSubsystemTickInput(),
+    relicState: PassiveRelicStackState = PassiveRelicStackState()
+): com.example.game.contracts.LiveSubsystemTickSummary = stepLiveSubsystems(input, relicState)
+
 fun DeterministicParticlePool.step(dtSeconds: Float) {
     step((dtSeconds * 1000f).toLong().coerceAtLeast(1L))
 }
@@ -218,13 +249,17 @@ data class GameSessionState(
     val particlePool: DeterministicParticlePool = DeterministicParticlePool(capacity = 256),
     val boxheadCombo: BoxheadComboState = BoxheadComboState(),
     val vendingStock: VendingStockSnapshot = SingleCurrencyVendingEngine.generateWaveVendingStock(1, mapSeed),
-    val worldStateCache: SparseWorldStateCache = SparseWorldStateCache()
+    val worldStateCache: SparseWorldStateCache = SparseWorldStateCache(),
+    val liveSubsystemSummary: com.example.game.contracts.LiveSubsystemTickSummary? = null
 ) {
     val currentWeapon: WeaponSpec
         get() {
             val id = unlockedWeaponIds.getOrNull(currentWeaponIndex) ?: "pistol"
             return DEFAULT_WEAPONS.find { it.id == id } ?: DEFAULT_WEAPONS.first()
         }
+
+    val weapon: WeaponSpec
+        get() = currentWeapon
 
     val currentWeaponLevel: Int
         get() = weaponLevels[currentWeapon.id] ?: 1
@@ -270,6 +305,9 @@ class BoxBoyGameEngine {
     private var lastEntropyBreachSpawnMs = 0L
     private var lastRelicAuraTickMs = -10_000L
     private var clockMs = 0L
+    private var liveBridgeTickCounter = 0L
+    var lastLiveSubsystemSummary: com.example.game.contracts.LiveSubsystemTickSummary? = null
+        private set
     val flowFieldServer = FlowFieldServer()
     val deterministicParticlePool = DeterministicParticlePool(capacity = 256)
 
@@ -285,6 +323,17 @@ class BoxBoyGameEngine {
         coopPeerY: Float?,
         aimAngleOverrideRad: Float? = null
     ): GameSessionState {
+        if (state.clockMs < clockMs || state.clockMs == 0L) {
+            nextEntityId = 1
+            lastFireTimestampMs = -10_000L
+            lastSpawnTimestampMs = 0L
+            lastEntropyBreachSpawnMs = 0L
+            lastRelicAuraTickMs = -10_000L
+            clockMs = 0L
+            liveBridgeTickCounter = 0L
+            deterministicParticlePool.recycleAll()
+        }
+
         if (state.isSimulationFrozen) return state
 
         val speedCfg = state.speedConfig
@@ -433,30 +482,44 @@ class BoxBoyGameEngine {
             val candX = nx + stepDx
             val candY = ny + stepDy
 
-            if (isWalkable(candX, candY, state.map, state.unlockedRooms)) {
+            // Multi-sample collision to prevent high-speed tunneling through narrow barriers
+            val midX = nx + stepDx * 0.5f
+            val midY = ny + stepDy * 0.5f
+
+            if (isWalkable(candX, candY, state.map, state.unlockedRooms) && isWalkable(midX, midY, state.map, state.unlockedRooms)) {
                 nx = candX
                 ny = candY
             } else {
                 // Separate X and Y axis sliding with diagonal corner-nudge assistance
                 val slideNudge = hypot(stepDx, stepDy) * 0.72f
-                val canMoveX = isWalkable(candX, ny, state.map, state.unlockedRooms)
-                val canMoveY = isWalkable(nx, candY, state.map, state.unlockedRooms)
-                if (canMoveX) {
-                    nx = candX
-                } else if (abs(moveY) < 0.4f) {
-                    if (isWalkable(candX, ny - 15f, state.map, state.unlockedRooms)) {
-                        ny -= slideNudge
-                    } else if (isWalkable(candX, ny + 15f, state.map, state.unlockedRooms)) {
-                        ny += slideNudge
+                val canMoveX = isWalkable(candX, ny, state.map, state.unlockedRooms) && isWalkable(midX, ny, state.map, state.unlockedRooms)
+                val canMoveY = isWalkable(nx, candY, state.map, state.unlockedRooms) && isWalkable(nx, midY, state.map, state.unlockedRooms)
+
+                // Prevent moving through locked-room diagonal corners when both X and Y sliding are valid independently
+                if (canMoveX && canMoveY) {
+                    if (abs(stepDx) >= abs(stepDy)) {
+                        nx = candX
+                    } else {
+                        ny = candY
                     }
-                }
-                if (canMoveY) {
-                    ny = candY
-                } else if (abs(moveX) < 0.4f) {
-                    if (isWalkable(nx - 15f, candY, state.map, state.unlockedRooms)) {
-                        nx -= slideNudge
-                    } else if (isWalkable(nx + 15f, candY, state.map, state.unlockedRooms)) {
-                        nx += slideNudge
+                } else {
+                    if (canMoveX) {
+                        nx = candX
+                    } else if (abs(moveY) < 0.4f) {
+                        if (isWalkable(candX, ny - 15f, state.map, state.unlockedRooms)) {
+                            ny -= slideNudge
+                        } else if (isWalkable(candX, ny + 15f, state.map, state.unlockedRooms)) {
+                            ny += slideNudge
+                        }
+                    }
+                    if (canMoveY) {
+                        ny = candY
+                    } else if (abs(moveX) < 0.4f) {
+                        if (isWalkable(nx - 15f, candY, state.map, state.unlockedRooms)) {
+                            nx -= slideNudge
+                        } else if (isWalkable(nx + 15f, candY, state.map, state.unlockedRooms)) {
+                            nx += slideNudge
+                        }
                     }
                 }
             }
@@ -642,11 +705,13 @@ class BoxBoyGameEngine {
                 var pierced = 0
                 val totalAllowedPierce = modWeapon.effectivePierceCount + tierStats.bonusPierceCount
                 val hitCandidates = zombies
-                    .filter { pointToSegmentDistance(it.x, it.y, nx, ny, endX, endY) <= it.archetype.radius + 8f }
+                    .filter { it.hp > 0 && pointToSegmentDistance(it.x, it.y, nx, ny, endX, endY) <= it.archetype.radius + 8f }
                     .sortedBy { hypot(it.x - nx, it.y - ny) }
+                val primaryKilledIds = HashSet<Int>()
 
                 for (z in hitCandidates) {
                     if (pierced >= totalAllowedPierce) break
+                    if (z.hp <= 0) continue
                     anyPelletHit = true
 
                     val targetIlluminated = AbyssalChiaroscuroLightingEngine.isPointIlluminatedByPlayer(
@@ -660,7 +725,7 @@ class BoxBoyGameEngine {
                     )
                     val scytheCritBonus = Ror2PassiveRelicSystem.computeCritChanceBonus(passiveRelics)
                     val isScytheCrit = scytheCritBonus > 0f &&
-                        (((clockMs + z.id * 37L) % 100L) < (scytheCritBonus * 100f).toLong() || scytheCritBonus >= 0.05f)
+                        (((clockMs + z.id * 37L) % 100L) < (scytheCritBonus * 100f).toLong())
                     val isCritHit = targetIlluminated || isScytheCrit
                     val crowbarMult = Ror2PassiveRelicSystem.computeCrowbarMultiplier(z.hp, z.maxHp, passiveRelics)
                     val rawCritDamage = if (isCritHit) {
@@ -749,7 +814,7 @@ class BoxBoyGameEngine {
                             )
                         }
                     }
-                    if (z.hp <= 0) {
+                    if (z.hp <= 0 && primaryKilledIds.add(z.id)) {
                         comboCount++
                         comboTimerMs = 4500L
                         boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, 1).first
@@ -837,6 +902,79 @@ class BoxBoyGameEngine {
                             )
                         }
                     }
+
+                    // Process any secondary/proc-killed zombies (Ukulele, AtG Missile, Explosive Splash, Will-o'-the-Wisp)
+                    val procKilled = zombies.filter { it.hp <= 0 && it.id !in primaryKilledIds }
+                    for (pk in procKilled) {
+                        if (!primaryKilledIds.add(pk.id)) continue
+                        comboCount++
+                        comboTimerMs = 4500L
+                        boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, 1).first
+                        val mult = (1 + comboCount / 5).coerceAtMost(8)
+                        val earned = pk.archetype.rewardPoints * mult
+                        points += earned
+                        totalKills++
+                        depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 2)
+                        if (state.armorRig.countForSet(ArmorSetArchetype.VOID_ALCHEMIST) >= 4) {
+                            shield = (shield + 5).coerceAtMost(maxShield)
+                        }
+                        surfaceDecals.add(
+                            PersistentSurfaceDecal(
+                                decalId = "ichor_${clockMs}_${pk.id}",
+                                worldX = pk.x,
+                                worldY = pk.y,
+                                radiusPx = 18f,
+                                kind = SurfaceDecalKind.ZOMBIE_ICHOR_SPLATTER,
+                                colorArgb = 0x993A0CA3,
+                                createdAtTick = clockMs
+                            )
+                        )
+                        if (passiveRelics.countOf(PassiveRelicKind.WILL_O_WISP_JAR) > 0) {
+                            surfaceDecals.add(
+                                PersistentSurfaceDecal(
+                                    decalId = "wisp_${clockMs}_${pk.id}",
+                                    worldX = pk.x,
+                                    worldY = pk.y,
+                                    radiusPx = 32f,
+                                    kind = SurfaceDecalKind.BARREL_SCORCH_CRATER,
+                                    colorArgb = 0xAAFF595E,
+                                    createdAtTick = clockMs
+                                )
+                            )
+                        }
+                        banners.add(
+                            FloatingBanner(
+                                text = "+$earned",
+                                x = pk.x,
+                                y = pk.y - 14f,
+                                colorHex = 0xFF00FF66
+                            )
+                        )
+                        maybeSpawnLootDrop(
+                            zombie = pk,
+                            wave = state.wave,
+                            lootDrops = lootDrops,
+                            banners = banners
+                        )
+                        val droppedRelic = Ror2PassiveRelicSystem.rollRareRelicDrop(
+                            wave = state.wave,
+                            isBossKill = pk.archetype == ZombieArchetype.DEVIL_BOSS,
+                            isComboMilestone = comboCount > 0 && comboCount % 8 == 0,
+                            seed = state.mapSeed xor (totalKills.toLong() * 31L) xor clockMs
+                        )
+                        if (droppedRelic != null) {
+                            passiveRelics = Ror2PassiveRelicSystem.collectRelicDrop(passiveRelics, droppedRelic, 1)
+                            val newCount = passiveRelics.countOf(droppedRelic)
+                            banners.add(
+                                FloatingBanner(
+                                    text = "RELIC: ${droppedRelic.displayName} (x$newCount)",
+                                    x = pk.x,
+                                    y = pk.y - 28f,
+                                    colorHex = droppedRelic.colorHex
+                                )
+                            )
+                        }
+                    }
                 }
 
                 tracers.add(
@@ -911,9 +1049,17 @@ class BoxBoyGameEngine {
         // Remove any zombies killed by Cryo Mines, Puddles, Auto-Turret Beacons, or Relic Auras
         val secondaryKills = zombies.filter { it.hp <= 0 }
         for (zk in secondaryKills) {
-            totalKills++
-            points += zk.archetype.rewardPoints
+            comboCount++
+            comboTimerMs = 4500L
             boxheadCombo = BoxheadComboAndPhysicsRegistry.registerKillStreak(boxheadCombo, 1).first
+            val mult = (1 + comboCount / 5).coerceAtMost(8)
+            val earned = zk.archetype.rewardPoints * mult
+            points += earned
+            totalKills++
+            depthEscrow = depthEscrow.copy(abyssalScrap = depthEscrow.abyssalScrap + 2)
+            if (state.armorRig.countForSet(ArmorSetArchetype.VOID_ALCHEMIST) >= 4) {
+                shield = (shield + 5).coerceAtMost(maxShield)
+            }
             surfaceDecals.add(
                 PersistentSurfaceDecal(
                     decalId = "ichor_${clockMs}_${zk.id}",
@@ -938,7 +1084,33 @@ class BoxBoyGameEngine {
                     )
                 )
             }
+            banners.add(
+                FloatingBanner(
+                    text = "+$earned",
+                    x = zk.x,
+                    y = zk.y - 14f,
+                    colorHex = 0xFF00FF66
+                )
+            )
             maybeSpawnLootDrop(zk, state.wave, lootDrops, banners)
+            val droppedRelic = Ror2PassiveRelicSystem.rollRareRelicDrop(
+                wave = state.wave,
+                isBossKill = zk.archetype == ZombieArchetype.DEVIL_BOSS,
+                isComboMilestone = comboCount > 0 && comboCount % 8 == 0,
+                seed = state.mapSeed xor (totalKills.toLong() * 31L) xor clockMs
+            )
+            if (droppedRelic != null) {
+                passiveRelics = Ror2PassiveRelicSystem.collectRelicDrop(passiveRelics, droppedRelic, 1)
+                val newCount = passiveRelics.countOf(droppedRelic)
+                banners.add(
+                    FloatingBanner(
+                        text = "RELIC: ${droppedRelic.displayName} (x$newCount)",
+                        x = zk.x,
+                        y = zk.y - 28f,
+                        colorHex = droppedRelic.colorHex
+                    )
+                )
+            }
         }
         zombies.removeAll { it.hp <= 0 }
 
@@ -1454,7 +1626,12 @@ class BoxBoyGameEngine {
                             points -= tierUpgradeCost
                             val nextLv = curLv + 1
                             weaponLevels = weaponLevels + (curWpn.id to nextLv)
-                            magAmmo[curWpn.id] = state.currentMaxMagSize + 4
+                            val activeModForSlot = modularInventory[curWpn.id] ?: state.activeModularWeaponForCurrentSlot
+                            magAmmo[curWpn.id] = WeaponUpgradeProgression.computeEffectiveStats(
+                                curWpn,
+                                nextLv,
+                                activeModForSlot
+                            ).magCapacity
                             val sIdx = stations.indexOfFirst { it.id == nearby.id }
                             if (sIdx >= 0) {
                                 stations[sIdx] = stations[sIdx].copy(
@@ -1509,7 +1686,9 @@ class BoxBoyGameEngine {
                             } else {
                                 points -= nearby.cost
                             }
-                            val tempered = equippedModular.copy(anvilUpgradeTier = equippedModular.anvilUpgradeTier + 1)
+                            val activeSlotWeaponId = unlockedWeapons.getOrNull(currentWeaponIdx) ?: state.currentWeapon.id
+                            val activeSlotMod = modularInventory[activeSlotWeaponId] ?: state.activeModularWeaponForCurrentSlot
+                            val tempered = activeSlotMod.copy(anvilUpgradeTier = activeSlotMod.anvilUpgradeTier + 1)
                             equippedModular = tempered
                             modularInventory = modularInventory + (tempered.baseWeaponId to tempered)
                             statusToast = "ANVIL TEMPERED ${tempered.customTitle} TO +${tempered.anvilUpgradeTier}!"
@@ -1551,6 +1730,29 @@ class BoxBoyGameEngine {
             coopPeers = squadPeers,
             nowMs = clockMs
         )
+
+        // BUG-06: Step BoxBoysLiveSubsystemBridge throttled every 6 ticks (10Hz) for zero GC overhead
+        liveBridgeTickCounter++
+        val liveSummary = if (liveBridgeTickCounter == 1L || liveBridgeTickCounter % 6L == 0L || state.liveSubsystemSummary == null) {
+            val tickInput = com.example.game.contracts.LiveSubsystemTickInput(
+                tick = liveBridgeTickCounter,
+                wave = wave,
+                dtSeconds = dtSec,
+                playerX = nx,
+                playerY = ny,
+                playerHp = hp,
+                playerMaxHp = maxHp,
+                currencyPoints = points,
+                activeZombieCount = zombies.size,
+                comboStreak = comboCount,
+                seed = state.mapSeed
+            )
+            val evaluated = BoxBoysLiveSubsystemBridge.evaluateAllSubsystems(tickInput, passiveRelics)
+            lastLiveSubsystemSummary = evaluated
+            evaluated
+        } else {
+            state.liveSubsystemSummary
+        }
 
         return state.copy(
             map = updatedMap,
@@ -1608,7 +1810,8 @@ class BoxBoyGameEngine {
             statusToast = statusToast,
             surfaceDecals = surfaceDecals,
             boxheadCombo = boxheadCombo,
-            vendingStock = vendingStock
+            vendingStock = vendingStock,
+            liveSubsystemSummary = liveSummary
         )
     }
 

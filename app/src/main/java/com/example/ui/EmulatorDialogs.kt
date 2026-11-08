@@ -922,7 +922,7 @@ fun ControllerMapperDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Colorblind Geometric Hazard Markers (\u25B2 \u25C6 \u2B21 \u271A)", style = MaterialTheme.typography.bodyMedium)
+                    Text("Colorblind Geometric Hazard Markers (\u25B2 \u25C6 \u2B21 \u25A0)", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = config.colorblindHazardMarkers,
                         onCheckedChange = { checked ->

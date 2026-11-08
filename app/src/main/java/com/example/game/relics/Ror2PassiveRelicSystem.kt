@@ -173,6 +173,16 @@ data class PassiveRelicCombatSnapshot(
 
 object Ror2PassiveRelicSystem {
     const val PURCHASABLE_IN_SHOPS: Boolean = false
+    private val catchUpAwardsBySeed = LinkedHashMap<Long, Int>()
+
+    @Synchronized
+    fun resetCatchUpTracking(seed: Long? = null) {
+        if (seed == null) {
+            catchUpAwardsBySeed.clear()
+        } else {
+            catchUpAwardsBySeed.remove(seed)
+        }
+    }
 
     fun collectRelicDrop(
         current: PassiveRelicStackState,
@@ -244,12 +254,25 @@ object Ror2PassiveRelicSystem {
     /**
      * Grants `floor(wave / 5)` random RoR2 Passive Relics for a player hot-joining mid-session!
      */
+    @Synchronized
     fun rollMidSessionCatchUpRelics(wave: Int, seed: Long): PassiveRelicStackState {
         val bonusCount = (wave / 5).coerceAtLeast(0)
+        val alreadyAwarded = catchUpAwardsBySeed[seed] ?: 0
+        val toAward = (bonusCount - alreadyAwarded).coerceAtLeast(0)
+        if (bonusCount > alreadyAwarded) {
+            if (catchUpAwardsBySeed.size >= 256) {
+                val oldestKey = catchUpAwardsBySeed.keys.firstOrNull()
+                if (oldestKey != null) catchUpAwardsBySeed.remove(oldestKey)
+            }
+            catchUpAwardsBySeed[seed] = bonusCount
+        }
         var state = PassiveRelicStackState()
         val rng = Random(seed xor 0x6A09E667F3BCC908L)
         val pool = PassiveRelicKind.entries
-        repeat(bonusCount) {
+        repeat(alreadyAwarded) {
+            rng.nextInt()
+        }
+        repeat(toAward) {
             val chosen = pool[abs(rng.nextInt()) % pool.size]
             state = collectRelicDrop(state, chosen, 1)
         }

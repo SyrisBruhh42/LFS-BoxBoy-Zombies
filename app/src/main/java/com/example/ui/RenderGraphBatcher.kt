@@ -1,5 +1,7 @@
 package com.example.ui
 
+import android.content.Context
+import android.graphics.BitmapFactory
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -10,6 +12,7 @@ import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PaintingStyle
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -209,16 +212,93 @@ object RenderGraphBatcher {
 
 /**
  * P.S. 2: Pre-baked GPU ImageBitmap Sprite Atlas Registry for Dark Bio-Noir 3/4 Orthographic
- * Overlapping Sprites (Pine/Oak Trees, Shrubs, Bio-Noir Lakes, and Tactical Building Roofs).
+ * Overlapping Sprites (Pine/Oak Trees, Shrubs, Bio-Noir Lakes, Tactical Building Roofs, and 4K Inked Atlases).
  */
 object BioNoirSpriteAtlasRegistry {
     const val TREE_CELL_PX = 96
     const val LAKE_STAMP_PX = 160
     const val BUILDING_ROOF_STAMP_PX = 128
 
+    const val HERO_TUXEDO_ATLAS_ASSET = "inked-4k/hero_tuxedo_atlas.png"
+    const val ZOMBIE_SUIT_ATLAS_ASSET = "inked-4k/zombie_suit_atlas.png"
+    const val WOLF_DIRE_ATLAS_ASSET = "inked-4k/wolf_dire_atlas.png"
+    const val PROPS_WASTELAND_ATLAS_ASSET = "inked-4k/props_wasteland_atlas.png"
+
+    val CANONICAL_INKED_4K_ATLAS_ASSETS = listOf(
+        HERO_TUXEDO_ATLAS_ASSET,
+        ZOMBIE_SUIT_ATLAS_ASSET,
+        WOLF_DIRE_ATLAS_ASSET,
+        PROPS_WASTELAND_ATLAS_ASSET
+    )
+
+    val CANONICAL_BUNDLED_MAP_ASSETS = listOf(
+        "maps/boxhead_2play_classic_rooms.boxboys.json",
+        "maps/elona_12x12_vault_template.boxboys.json",
+        "maps/sunvale_desert_bazaar_25d.boxboys.json"
+    )
+
     val foliageSpriteSheet: ImageBitmap by lazy { buildFoliageSpriteSheet() }
     val lakeBioNoirStamp: ImageBitmap by lazy { buildLakeBioNoirStamp() }
     val buildingRoofStamp: ImageBitmap by lazy { buildBuildingRoofStamp() }
+
+    @Volatile
+    var heroTuxedoAtlas: ImageBitmap? = null
+        private set
+
+    @Volatile
+    var zombieSuitAtlas: ImageBitmap? = null
+        private set
+
+    @Volatile
+    var wolfDireAtlas: ImageBitmap? = null
+        private set
+
+    @Volatile
+    var propsWastelandAtlas: ImageBitmap? = null
+        private set
+
+    @Volatile
+    var isInked4kLoadedFromAssets: Boolean = false
+        private set
+
+    /**
+     * Loads the 4K inked sprite atlases (`assets/inked-4k/<atlas>.png`) via `BitmapFactory.decodeStream`
+     * when a valid Android `Context` is provided, and falls back safely to the procedural bitmap
+     * stamps when `context == null` (e.g., in headless JVM unit tests).
+     */
+    @Synchronized
+    fun ensureInitialized(context: Context? = null): Boolean {
+        if (isInked4kLoadedFromAssets && heroTuxedoAtlas != null && propsWastelandAtlas != null) {
+            return true
+        }
+        if (context != null) {
+            try {
+                val assets = context.assets
+                val hero = assets.open(HERO_TUXEDO_ATLAS_ASSET).use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                val zombie = assets.open(ZOMBIE_SUIT_ATLAS_ASSET).use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                val wolf = assets.open(WOLF_DIRE_ATLAS_ASSET).use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                val props = assets.open(PROPS_WASTELAND_ATLAS_ASSET).use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+                if (hero != null && zombie != null && wolf != null && props != null) {
+                    heroTuxedoAtlas = hero
+                    zombieSuitAtlas = zombie
+                    wolfDireAtlas = wolf
+                    propsWastelandAtlas = props
+                    isInked4kLoadedFromAssets = true
+                    return true
+                }
+            } catch (_: Throwable) {
+                // Fall back to procedural stamps below
+            }
+        }
+        // Safe fallback to procedural bitmap stamps when context == null or in headless unit tests
+        runCatching {
+            if (heroTuxedoAtlas == null) heroTuxedoAtlas = buildingRoofStamp
+            if (zombieSuitAtlas == null) zombieSuitAtlas = buildingRoofStamp
+            if (wolfDireAtlas == null) wolfDireAtlas = foliageSpriteSheet
+            if (propsWastelandAtlas == null) propsWastelandAtlas = lakeBioNoirStamp
+        }
+        return isInked4kLoadedFromAssets
+    }
 
     private fun buildFoliageSpriteSheet(): ImageBitmap {
         val bmp = ImageBitmap(TREE_CELL_PX * 4, TREE_CELL_PX, ImageBitmapConfig.Argb8888)

@@ -1,0 +1,65 @@
+[gd_scene load_steps=3 format=3 uid="uid://boxboy_arena_main_v472"]
+
+[ext_resource type="Script" path="res://scripts/BoxBoyArenaController.gd" id="1_controller"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_player"]
+radius = 16.0
+
+[node name="BoxBoyArenaMain" type="Node2D"]
+script = ExtResource("1_controller")
+
+[node name="WorldEnvironment" type="CanvasModulate" parent="."]
+color = Color(0.11, 0.14, 0.12, 1)
+
+[node name="ArenaNavigationRegion" type="NavigationRegion2D" parent="."]
+
+[node name="DistrictTileMapGroup" type="Node2D" parent="ArenaNavigationRegion"]
+
+[node name="YSortWorldStage" type="Node2D" parent="ArenaNavigationRegion"]
+y_sort_enabled = true
+
+[node name="ExtrudedPillarsAndWalls" type="StaticBody2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+
+[node name="InteractiveStations" type="Area2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+
+[node name="ConstructibleFortifications" type="StaticBody2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+
+[node name="BoxBoyPlayer" type="CharacterBody2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+position = Vector2(800, 450)
+motion_mode = 1
+
+[node name="PlayerCollisionShape" type="CollisionShape2D" parent="ArenaNavigationRegion/YSortWorldStage/BoxBoyPlayer"]
+shape = SubResource("CircleShape2D_player")
+
+[node name="PlayerLanternLight" type="PointLight2D" parent="ArenaNavigationRegion/YSortWorldStage/BoxBoyPlayer"]
+energy = 1.35
+shadow_enabled = true
+shadow_filter = 1
+texture_scale = 3.2
+
+[node name="AimRayCast2D" type="RayCast2D" parent="ArenaNavigationRegion/YSortWorldStage/BoxBoyPlayer"]
+target_position = Vector2(520, 0)
+collide_with_areas = true
+
+[node name="CoopSquadPeers" type="Node2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+y_sort_enabled = true
+
+[node name="ZombieHordeContainer" type="Node2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+y_sort_enabled = true
+
+[node name="BallisticsAndPuddles" type="Node2D" parent="ArenaNavigationRegion/YSortWorldStage"]
+
+[node name="TacticalArenaCamera" type="Camera2D" parent="."]
+position = Vector2(800, 450)
+position_smoothing_enabled = true
+position_smoothing_speed = 8.5
+
+[node name="TacticalHudCanvas" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="HudStatusLabel" type="Label" parent="TacticalHudCanvas"]
+offset_left = 24.0
+offset_top = 18.0
+offset_right = 920.0
+offset_bottom = 54.0
+text = "BOXBOY ZOMBIES // GODOT 4.7.2 SOVEREIGN ARENA // PIXEL 8 PRO 120HZ"

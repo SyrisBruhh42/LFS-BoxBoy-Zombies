@@ -214,12 +214,29 @@ object TacticalCombatCoordinator {
         telegraphs.clear()
         telegraphs.addAll(updatedTelegraphs)
 
-        // 3. Step Enemy Projectiles (check collision with Barricade Walls & Player)
+        // 3. Step Enemy Projectiles (check TTL expiration first, then collision with Barricade Walls & Player)
         val survivingProjectiles = mutableListOf<EnemyProjectile>()
         for (proj in enemyProjectiles) {
             val nx = proj.x + proj.vx * dtSec
             val ny = proj.y + proj.vy * dtSec
             val rem = proj.ttlMs - deltaMs
+
+            if (rem <= 0L) {
+                if (proj.spawnsPuddleOnImpact) {
+                    elementalPuddles.add(
+                        ElementalPuddle(
+                            id = nextEntityIdProvider(),
+                            x = nx,
+                            y = ny,
+                            radius = 58f,
+                            elementKind = proj.elementKind,
+                            hitsPlayers = true,
+                            hitsZombies = false
+                        )
+                    )
+                }
+                continue
+            }
 
             // Check barricade wall interception
             val hitFort = fortifications.firstOrNull {
@@ -250,23 +267,7 @@ object TacticalCombatCoordinator {
                 continue
             }
 
-            if (rem <= 0L) {
-                if (proj.spawnsPuddleOnImpact) {
-                    elementalPuddles.add(
-                        ElementalPuddle(
-                            id = nextEntityIdProvider(),
-                            x = nx,
-                            y = ny,
-                            radius = 58f,
-                            elementKind = proj.elementKind,
-                            hitsPlayers = true,
-                            hitsZombies = false
-                        )
-                    )
-                }
-            } else {
-                survivingProjectiles.add(proj.copy(x = nx, y = ny, ttlMs = rem))
-            }
+            survivingProjectiles.add(proj.copy(x = nx, y = ny, ttlMs = rem))
         }
         enemyProjectiles.clear()
         enemyProjectiles.addAll(survivingProjectiles)

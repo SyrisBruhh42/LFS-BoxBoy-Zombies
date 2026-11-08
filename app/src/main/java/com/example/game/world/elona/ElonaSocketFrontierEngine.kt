@@ -440,7 +440,6 @@ object ElonaSocketFrontierEngine {
         catalog: List<SectionComponentDef> = DEFAULT_COMPONENT_CATALOG
     ): AssembledSectionReceipt {
         val targetFrontier = currentReceipt.frontierSockets.find { it.frontierId == frontierId }
-            ?: currentReceipt.frontierSockets.firstOrNull()
             ?: return currentReceipt
         val activeCatalog = catalog.ifEmpty { DEFAULT_COMPONENT_CATALOG }
         val stepSeed = currentReceipt.seed xor (targetFrontier.targetGridX * 73856093L) xor (targetFrontier.targetGridY * 19349663L)
@@ -531,7 +530,13 @@ object ElonaSocketFrontierEngine {
         while (queue.isNotEmpty()) {
             val curr = queue.removeFirst()
             for (dir in SocketDirection.entries) {
+                val socket = curr.sockets.find { it.direction == dir } ?: continue
+                if (socket.kind == SocketKind.WALL) continue
+                if (!curr.unlocked && socket.kind == SocketKind.LOCKED_DEBRIS_DOOR) continue
                 val neighbor = byCoord[(curr.gridX + dir.dx) to (curr.gridY + dir.dy)] ?: continue
+                val neighborSocket = neighbor.sockets.find { it.direction == dir.opposite() } ?: continue
+                if (neighborSocket.kind == SocketKind.WALL) continue
+                if (!neighbor.unlocked && neighborSocket.kind == SocketKind.LOCKED_DEBRIS_DOOR) continue
                 if (visited.add(neighbor.nodeId)) {
                     queue.add(neighbor)
                 }

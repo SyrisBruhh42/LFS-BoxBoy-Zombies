@@ -34,7 +34,7 @@ object OfflineTacticalAiEngine {
         for (ch in cleanPrompt) {
             hash = 31L * hash + ch.code.toLong()
         }
-        val mapSeed = (abs(hash xor (state.wave.toLong() * 7919L)) % 89999999L) + 10000000L
+        val mapSeed = (((hash xor (state.wave.toLong() * 7919L)) and 0x7FFFFFFFFFFFFFFFL) % 89999999L) + 10000000L
 
         // 2. Semantic keyword matching for recommended weapon
         val recommendedWeaponId = when {

@@ -59,6 +59,13 @@ class CombatAudioEngine(context: Context? = null) {
 
     private val lastTriggerUptimeMap = ConcurrentHashMap<String, Long>()
     private val cachedWeaponBuffers = ConcurrentHashMap<String, ShortArray>()
+    private val activeTracks = ConcurrentHashMap.newKeySet<AudioTrack>()
+    @Volatile
+    private var isReleased: Boolean = false
+
+    companion object {
+        const val MAX_CONCURRENT_AUDIO_TRACKS = 8
+    }
 
     private val vibrator: Vibrator? by lazy {
         val ctx = appContext ?: return@lazy null
@@ -393,8 +400,22 @@ class CombatAudioEngine(context: Context? = null) {
     }
 
     private fun dispatchPcmToAudioTrack(pcm: ShortArray, pitchRateMultiplier: Float = 1.0f) {
-        if (!sfxEnabled || sfxVolume <= 0.02f || appContext == null) return
+        if (isReleased || !sfxEnabled || sfxVolume <= 0.02f || appContext == null) return
         try {
+            while (activeTracks.size >= MAX_CONCURRENT_AUDIO_TRACKS) {
+                val oldest = activeTracks.firstOrNull() ?: break
+                if (activeTracks.remove(oldest)) {
+                    try {
+                        oldest.stop()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        oldest.release()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
             val byteSize = pcm.size * 2
             val effectiveSampleRate = (sampleRate * pitchRateMultiplier.coerceIn(0.65f, 1.65f)).toInt()
                 .coerceIn(12000, 48000)
@@ -417,15 +438,38 @@ class CombatAudioEngine(context: Context? = null) {
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .build()
 
-            track.write(pcm, 0, pcm.size)
+            val writeResult = track.write(pcm, 0, pcm.size)
+            if (writeResult < 0) {
+                track.release()
+                return
+            }
+            activeTracks.add(track)
+            if (isReleased) {
+                if (activeTracks.remove(track)) {
+                    try {
+                        track.stop()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        track.release()
+                    } catch (_: Exception) {
+                    }
+                }
+                return
+            }
             track.setVolume(sfxVolume.coerceIn(0f, 1f))
             track.setNotificationMarkerPosition(pcm.size)
             track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
                 override fun onMarkerReached(t: AudioTrack?) {
-                    try {
-                        t?.stop()
-                        t?.release()
-                    } catch (_: Exception) {
+                    if (t != null && activeTracks.remove(t)) {
+                        try {
+                            t.stop()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            t.release()
+                        } catch (_: Exception) {
+                        }
                     }
                 }
 
@@ -436,11 +480,41 @@ class CombatAudioEngine(context: Context? = null) {
         }
     }
 
+    /**
+     * Maps duration and amplitude onto a Pixel 8 Pro API 30+ `VibrationEffect.Composition`
+     * LRA primitive ID and normalized scale (`0.15f..1.0f`).
+     */
+    fun selectPixel8ProHapticPrimitive(durationMs: Long, amplitude: Int): Pair<Int, Float> {
+        val scale = (amplitude.coerceIn(1, 255) / 255f).coerceIn(0.15f, 1.0f)
+        val primitiveId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            when {
+                durationMs >= 45L || amplitude >= 220 -> VibrationEffect.Composition.PRIMITIVE_THUD
+                durationMs >= 30L -> VibrationEffect.Composition.PRIMITIVE_QUICK_RISE
+                durationMs >= 20L -> VibrationEffect.Composition.PRIMITIVE_QUICK_FALL
+                durationMs >= 14L || amplitude >= 135 -> VibrationEffect.Composition.PRIMITIVE_CLICK
+                else -> VibrationEffect.Composition.PRIMITIVE_TICK
+            }
+        } else {
+            0
+        }
+        return Pair(primitiveId, scale)
+    }
+
     private fun dispatchHapticPulse(durationMs: Long, amplitude: Int) {
-        if (!hapticsEnabled) return
+        if (isReleased || !hapticsEnabled) return
         val vib = vibrator ?: return
         try {
             if (!vib.hasVibrator()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val (primitiveId, scale) = selectPixel8ProHapticPrimitive(durationMs, amplitude)
+                if (vib.areAllPrimitivesSupported(primitiveId)) {
+                    val comp = VibrationEffect.startComposition()
+                        .addPrimitive(primitiveId, scale)
+                        .compose()
+                    vib.vibrate(comp)
+                    return
+                }
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vib.vibrate(VibrationEffect.createOneShot(durationMs, amplitude.coerceIn(1, 255)))
             } else {
@@ -452,7 +526,25 @@ class CombatAudioEngine(context: Context? = null) {
     }
 
     fun release() {
+        isReleased = true
         lastTriggerUptimeMap.clear()
+        cachedWeaponBuffers.clear()
+        val tracksToRelease = activeTracks.toList()
+        activeTracks.clear()
+        for (track in tracksToRelease) {
+            try {
+                track.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                track.release()
+            } catch (_: Exception) {
+            }
+        }
+        try {
+            vibrator?.cancel()
+        } catch (_: Exception) {
+        }
     }
 }
 
@@ -501,13 +593,19 @@ fun RememberCombatAudioEngineEffect(
                 weaponLevel = weaponLevel,
                 fireRateMultiplier = gameState.speedConfig.fireReloadMultiplier
             )
+        } else if (gameState.ammoTelemetry.shotsFired < prevShotsFired) {
+            prevShotsFired = gameState.ammoTelemetry.shotsFired
         }
 
         val hitDelta = gameState.ammoTelemetry.shotsHit - prevShotsHit
         val critDelta = gameState.ammoTelemetry.lightLockCrits - prevLightCrits
         val killDelta = gameState.totalKills - prevKills
 
-        if (hitDelta > 0 || killDelta > 0) {
+        if (hitDelta < 0 || killDelta < 0) {
+            prevShotsHit = gameState.ammoTelemetry.shotsHit
+            prevLightCrits = gameState.ammoTelemetry.lightLockCrits
+            prevKills = gameState.totalKills
+        } else if (hitDelta > 0 || killDelta > 0) {
             prevShotsHit = gameState.ammoTelemetry.shotsHit
             prevLightCrits = gameState.ammoTelemetry.lightLockCrits
             prevKills = gameState.totalKills

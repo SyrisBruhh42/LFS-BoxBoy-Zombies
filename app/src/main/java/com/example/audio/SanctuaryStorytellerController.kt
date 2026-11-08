@@ -164,6 +164,9 @@ class SanctuaryStorytellerController(
                 sleepRemainingSeconds = 0,
                 sleepFadeVolumeMultiplier = 1.0f
             )
+            runCatching {
+                mediaPlayer?.setVolume(1.0f, 1.0f)
+            }
             return
         }
 
@@ -173,10 +176,13 @@ class SanctuaryStorytellerController(
             sleepRemainingSeconds = totalSeconds,
             sleepFadeVolumeMultiplier = 1.0f
         )
+        runCatching {
+            mediaPlayer?.setVolume(1.0f, 1.0f)
+        }
 
         sleepTimerJob = scope.launch {
             var remaining = totalSeconds
-            while (isActive && remaining > 0) {
+            while (isActive && remaining >= 0) {
                 delay(1000L)
                 remaining--
                 val fade = computeSleepFadeVolumeMultiplier(validMin, remaining)
@@ -188,7 +194,7 @@ class SanctuaryStorytellerController(
                     mediaPlayer?.setVolume(fade, fade)
                 }
             }
-            if (remaining <= 0) {
+            if (remaining < 0) {
                 pausePlayback()
                 _state.value = _state.value.copy(
                     sleepTimerMinutes = 0,

@@ -232,16 +232,72 @@ class DriveSyncManager(
         }
 
         private fun extractJsonString(rawJson: String, key: String, default: String): String {
+            try {
+                val obj = JSONObject(rawJson)
+                if (obj.has(key) && !obj.isNull(key)) {
+                    val v = obj.optString(key, default)
+                    if (v != default || rawJson.contains("\"$key\"")) return v
+                }
+                val meta = obj.optJSONObject("metadata")
+                if (meta != null && meta.has(key) && !meta.isNull(key)) {
+                    val mv = meta.optString(key, default)
+                    if (mv != default) return mv
+                }
+            } catch (_: Exception) {
+            }
             val regex = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"")
             val match = regex.find(rawJson)?.groupValues?.getOrNull(1) ?: return default
-            return match
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\")
-                .replace("\\n", "\n")
-                .replace("\\r", "\r")
+            return buildString {
+                var i = 0
+                while (i < match.length) {
+                    val ch = match[i]
+                    if (ch == '\\' && i + 1 < match.length) {
+                        when (val next = match[i + 1]) {
+                            '"' -> append('"')
+                            '\\' -> append('\\')
+                            '/' -> append('/')
+                            'b' -> append('\b')
+                            'f' -> append('\u000C')
+                            'n' -> append('\n')
+                            'r' -> append('\r')
+                            't' -> append('\t')
+                            'u' -> {
+                                if (i + 5 < match.length) {
+                                    val hex = match.substring(i + 2, i + 6)
+                                    val code = hex.toIntOrNull(16)
+                                    if (code != null) {
+                                        append(code.toChar())
+                                        i += 6
+                                        continue
+                                    }
+                                }
+                                append('\\').append(next)
+                            }
+                            else -> append(next)
+                        }
+                        i += 2
+                    } else {
+                        append(ch)
+                        i++
+                    }
+                }
+            }
         }
 
         private fun extractJsonLong(rawJson: String, key: String, default: Long): Long {
+            try {
+                val obj = JSONObject(rawJson)
+                if (obj.has(key) && !obj.isNull(key)) {
+                    val v = obj.optLong(key, Long.MIN_VALUE)
+                    if (v != Long.MIN_VALUE) return v
+                }
+                val meta = obj.optJSONObject("metadata")
+                if (meta != null && meta.has(key) && !meta.isNull(key)) {
+                    val mv = meta.optLong(key, Long.MIN_VALUE)
+                    if (mv != Long.MIN_VALUE) return mv
+                }
+            } catch (_: Exception) {
+            }
             val regex = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(-?\\d+)")
             return regex.find(rawJson)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: default
         }
@@ -711,7 +767,7 @@ class DriveSyncManager(
         val primaryOrFirst = primarySaveFile ?: newlyWrittenEntries.first()
         _syncState.value = _syncState.value.copy(
             isSyncing = false,
-            isDriveConnected = remoteSuccess || email.isNotBlank(),
+            isDriveConnected = remoteSuccess,
             accountEmail = email,
             driveFiles = mergedList,
             lastSyncedEpochMs = System.currentTimeMillis(),
@@ -721,7 +777,11 @@ class DriveSyncManager(
                 "Saved to $TARGET_FOLDER_PATH Vault (${newlyWrittenEntries.size} envelope(s) | SHA-256 Verified)"
             }
         )
-        Result.success(primaryOrFirst)
+        if (!remoteSuccess) {
+            Result.failure(IllegalStateException("Remote Google Drive upload failed; saved locally to $TARGET_FOLDER_PATH Vault"))
+        } else {
+            Result.success(primaryOrFirst)
+        }
     }
 
     /**
@@ -945,7 +1005,22 @@ class DriveSyncManager(
                     matchingLocal == null -> DriveConflictStatus.IN_SYNC
                     file.modifiedTimeEpochMs > matchingLocal.timestampEpochMs + 1000L -> DriveConflictStatus.CLOUD_NEWER
                     matchingLocal.timestampEpochMs > file.modifiedTimeEpochMs + 1000L -> DriveConflictStatus.LOCAL_NEWER
-                    else -> DriveConflictStatus.IN_SYNC
+                    else -> {
+                        val localExpectedChecksum = computeEnvelopeSha256(
+                            slotName = matchingLocal.slotName,
+                            highestWave = matchingLocal.highestWave,
+                            totalKills = matchingLocal.totalKills,
+                            points = matchingLocal.points,
+                            mapSeed = matchingLocal.mapSeed,
+                            timestampEpochMs = matchingLocal.timestampEpochMs,
+                            encryptedPayload = file.encryptedPayload
+                        )
+                        if (file.sha256Checksum.isNotBlank() && !file.sha256Checksum.equals(localExpectedChecksum, ignoreCase = true)) {
+                            DriveConflictStatus.CLOUD_NEWER
+                        } else {
+                            DriveConflictStatus.IN_SYNC
+                        }
+                    }
                 }
                 file.copy(conflictStatus = conflict)
             }
@@ -958,7 +1033,7 @@ class DriveSyncManager(
         persistDriveChronicles(merged)
         _syncState.value = _syncState.value.copy(
             isSyncing = false,
-            isDriveConnected = remoteSuccess || email.isNotBlank(),
+            isDriveConnected = remoteSuccess,
             accountEmail = email,
             driveFiles = merged,
             lastSyncedEpochMs = System.currentTimeMillis(),
@@ -968,7 +1043,11 @@ class DriveSyncManager(
                 "$TARGET_FOLDER_PATH Vault Ready (${merged.size} Envelopes)"
             }
         )
-        Result.success(merged)
+        if (!remoteSuccess) {
+            Result.failure(IllegalStateException("Remote Google Drive listing failed; using cached $TARGET_FOLDER_PATH Vault"))
+        } else {
+            Result.success(merged)
+        }
     }
 
     /**
@@ -1010,7 +1089,11 @@ class DriveSyncManager(
         val newestLocalEpoch = localSlots.maxOfOrNull { it.timestampEpochMs } ?: 0L
         val newestRemotePrimary = primaryRemoteFiles.maxByOrNull { it.modifiedTimeEpochMs }
 
-        if (newestRemotePrimary != null && newestRemotePrimary.modifiedTimeEpochMs > newestLocalEpoch + 1000L) {
+        if (newestRemotePrimary != null &&
+            (newestRemotePrimary.modifiedTimeEpochMs > newestLocalEpoch + 1000L ||
+                (newestRemotePrimary.conflictStatus == DriveConflictStatus.CLOUD_NEWER &&
+                    newestRemotePrimary.modifiedTimeEpochMs >= newestLocalEpoch - 1000L))
+        ) {
             _syncState.value = _syncState.value.copy(
                 autoPromotedSlotName = newestRemotePrimary.slotName,
                 statusMessage = "Newest-Wins Auto-Sync: Promoted '${newestRemotePrimary.slotName}' from $TARGET_FOLDER_PATH"

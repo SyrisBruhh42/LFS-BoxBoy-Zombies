@@ -369,7 +369,12 @@ object WorldChunkStreamer {
                 val cx = centerCoord.cx + dx
                 val cy = centerCoord.cy + dy
                 if (cx !in 0 until WORLD_COLS || cy !in 0 until WORLD_ROWS) continue
-                val slice = getOrBuildChunkSlice(map, ChunkCoord(cx, cy), ChunkLodTier.ACTIVE_FULL_DETAIL, 0L)
+                val coord = ChunkCoord(cx, cy)
+                val slice = chunkCache[coord]
+                if (slice == null) {
+                    if (dx == 0 && dy == 0) return false
+                    continue
+                }
 
                 for (i in 0 until slice.outcrops.size) {
                     val oc = slice.outcrops[i].bounds

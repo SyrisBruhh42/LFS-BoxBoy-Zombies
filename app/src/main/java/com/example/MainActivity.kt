@@ -2,9 +2,11 @@ package com.example
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,6 +20,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -31,6 +35,7 @@ import com.example.data.BoxBoyRepository
 import com.example.data.TrashArcadeLaunchParams
 import com.example.input.ControllerManager
 import com.example.ui.AuthScreen
+import com.example.ui.BioNoirSpriteAtlasRegistry
 import com.example.ui.GameScreen
 import com.example.ui.signOut
 import com.example.ui.theme.MyApplicationTheme
@@ -69,11 +74,15 @@ internal fun parseTrashArcadeIntent(intent: Intent?): TrashArcadeLaunchParams {
     fun readParam(key: String): String? {
         val fromExtra = extras?.getString(key)?.takeIf { it.isNotBlank() }
         if (fromExtra != null) return fromExtra
-        return data?.getQueryParameter(key)?.takeIf { it.isNotBlank() }
+        return if (data != null && data.isHierarchical) {
+            data.getQueryParameter(key)?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
     }
 
     val autostartRaw = extras?.get("oasis_autostart")?.toString()
-        ?: data?.getQueryParameter("oasis_autostart")
+        ?: if (data != null && data.isHierarchical) data.getQueryParameter("oasis_autostart") else null
     val autostart = autostartRaw?.equals("true", ignoreCase = true) == true ||
         autostartRaw == "1"
 
@@ -88,24 +97,77 @@ internal fun parseTrashArcadeIntent(intent: Intent?): TrashArcadeLaunchParams {
 }
 
 class MainActivity : ComponentActivity() {
+
+    private val launchParamsState = mutableStateOf(TrashArcadeLaunchParams())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // STEP 1: Configure App Check with launch intent before any UI or Firebase operations
         configureAppCheck(this, intent)
 
-        val launchParams = parseTrashArcadeIntent(intent)
+        launchParamsState.value = parseTrashArcadeIntent(intent)
 
         enableEdgeToEdge()
+        configurePixel8ProDisplay(targetFps = 120f)
+        BioNoirSpriteAtlasRegistry.ensureInitialized(this)
 
         setContent {
             MyApplicationTheme {
-                AppNavigation(launchParams = launchParams)
+                AppNavigation(launchParams = launchParamsState.value)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        launchParamsState.value = parseTrashArcadeIntent(intent)
+    }
+
+    internal fun configurePixel8ProDisplay(targetFps: Float = 120f) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val display = this.display
+                if (display != null) {
+                    val currentMode = display.mode
+                    val best120Mode = display.supportedModes
+                        .filter {
+                            it.physicalWidth == currentMode.physicalWidth &&
+                                it.physicalHeight == currentMode.physicalHeight
+                        }
+                        .maxByOrNull { it.refreshRate }
+                    if (best120Mode != null && best120Mode.refreshRate >= 90f) {
+                        window.attributes = window.attributes.apply {
+                            preferredDisplayModeId = best120Mode.modeId
+                            preferredRefreshRate = targetFps
+                        }
+                    }
+                }
+            }
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Let the platform and Compose view hierarchy process the event first.
+        // This ensures Back navigation and focused UI elements (like text fields or modals)
+        // consume the event before we treat it as a raw gameplay input.
+        if (super.dispatchKeyEvent(event)) {
+            return true
+        }
+
+        // If it wasn't consumed, pass it to the ControllerManager fallback.
         val action = event.action
         if (action == KeyEvent.ACTION_DOWN || action == KeyEvent.ACTION_UP) {
             val handledByGamepad = ControllerManager.onHardwareKeyEvent(
@@ -113,14 +175,11 @@ class MainActivity : ComponentActivity() {
                 isDown = action == KeyEvent.ACTION_DOWN,
                 eventTimeMs = SystemClock.uptimeMillis()
             )
-            // Still pass through to super so Compose modals/key-bind capture can inspect it if needed,
-            // or consume arrow/space keys so Android doesn't move focus highlight around buttons!
             if (handledByGamepad) {
-                super.dispatchKeyEvent(event)
                 return true
             }
         }
-        return super.dispatchKeyEvent(event)
+        return false
     }
 }
 
