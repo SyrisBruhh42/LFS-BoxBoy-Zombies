@@ -211,8 +211,8 @@ enum class LfsHostMode(val wireId: String, val label: String, val subtitle: Stri
         fun fromWireValue(raw: String?): LfsHostMode {
             val normalized = raw?.trim()?.uppercase().orEmpty()
             return when (normalized) {
-                "HOST_LOCAL_PC" -> HOST_LOCAL_PC
-                "HOST_LOCAL_DEVICE", "HOST-02" -> HOST_LOCAL_DEVICE
+                "HOST_LOCAL_PC", "HOST-LOCAL-PC" -> HOST_LOCAL_PC
+                "HOST_LOCAL_DEVICE", "HOST-LOCAL-DEVICE", "HOST-02" -> HOST_LOCAL_DEVICE
                 "LAUNCH_U2_HOSTING_SERVICE", "HOST-01" -> LAUNCH_U2_HOSTING_SERVICE
                 else -> entries.find { it.wireId.equals(normalized, ignoreCase = true) }
                     ?: LAUNCH_U2_HOSTING_SERVICE

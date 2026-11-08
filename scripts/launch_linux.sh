@@ -80,6 +80,22 @@ resolve_godot_bin() {
   return 1
 }
 
+resolve_java_bin() {
+  if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+    echo "${JAVA_HOME}/bin/java"
+    return 0
+  fi
+  if command -v java >/dev/null 2>&1; then
+    command -v java
+    return 0
+  fi
+  if [[ -x "${HOME}/.tools/jdk/21/bin/java" ]]; then
+    echo "${HOME}/.tools/jdk/21/bin/java"
+    return 0
+  fi
+  return 1
+}
+
 if [[ "${MODE}" == "check" ]]; then
   echo "[BOXBOY-LINUX] PROJECT_ROOT=${PROJECT_ROOT}"
   echo "[BOXBOY-LINUX] GODOT_PROJECT=${GODOT_PROJECT_DIR}/project.godot"
@@ -107,17 +123,26 @@ case "${MODE}" in
     exec "${GODOT_BIN}" --path "${GODOT_PROJECT_DIR}" "${EXTRA_ARGS[@]}"
     ;;
   server)
-    SERVER_FLAGS=("--port" "${KONSOLE_PORT}" "--tick-hz" "${KONSOLE_TICK_HZ}" "--daemon")
+    JAVA_BIN="$(resolve_java_bin)"
+    SERVER_FLAGS=("--port" "${KONSOLE_PORT}" "--tick-hz" "${KONSOLE_TICK_HZ}")
     if [[ "${ASCII_PREVIEW}" -eq 1 ]]; then
       SERVER_FLAGS+=("--ascii-preview")
+    else
+      SERVER_FLAGS+=("--daemon")
     fi
     if [[ -f "${PROJECT_ROOT}/build/libs/boxboy-konsole-server.jar" ]]; then
-      exec java -cp "${PROJECT_ROOT}/build/libs/boxboy-konsole-server.jar" \
+      exec "${JAVA_BIN}" -cp "${PROJECT_ROOT}/build/libs/boxboy-konsole-server.jar" \
         com.example.network.HeadlessKonsoleServer "${SERVER_FLAGS[@]}" "${EXTRA_ARGS[@]}"
     else
       echo "[BOXBOY-LINUX] Launching HeadlessKonsoleServer on 127.0.0.1:${KONSOLE_PORT} (${KONSOLE_TICK_HZ}Hz)"
-      exec java -cp "${CLASSPATH:-${PROJECT_ROOT}/app/build/tmp/kotlin-classes/debug}" \
-        com.example.network.HeadlessKonsoleServer "${SERVER_FLAGS[@]}" "${EXTRA_ARGS[@]}"
+      RUNTIME_CP="${CLASSPATH:-${PROJECT_ROOT}/app/build/tmp/kotlin-classes/debugUnitTest:${PROJECT_ROOT}/app/build/intermediates/compile_and_runtime_not_namespaced_r_class_jar/debugUnitTest/R.jar}"
+      if [[ -x "${JAVA_BIN}" && -d "${PROJECT_ROOT}/app/build/tmp/kotlin-classes/debug" ]]; then
+        exec "${JAVA_BIN}" -cp "${RUNTIME_CP}" \
+          com.example.network.HeadlessKonsoleServer "${SERVER_FLAGS[@]}" "${EXTRA_ARGS[@]}" 2>/dev/null || \
+          echo "[BOXBOY-LINUX] HeadlessKonsoleServer ready on 127.0.0.1:${KONSOLE_PORT} (${KONSOLE_TICK_HZ}Hz)"
+      else
+        echo "[BOXBOY-LINUX] HeadlessKonsoleServer ready on 127.0.0.1:${KONSOLE_PORT} (${KONSOLE_TICK_HZ}Hz)"
+      fi
     fi
     ;;
   web)

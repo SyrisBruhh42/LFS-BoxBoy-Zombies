@@ -135,20 +135,17 @@ class Relic17ShatteringJusticeTest {
         val config = Relic17ShatteringJusticeConfig()
         val engine = Relic17ShatteringJusticeEngine(config)
         val state = Relic17ShatteringJusticeState(stackCount = 1)
-        
+        val idsRefBefore = state.trackedEnemyIds
+        val countsRefBefore = state.enemyHitCounts
+        val durationsRefBefore = state.activeArmorPulverizedDurations
+
         val hits = IntArray(300) { it }
-        
-        val runtime = Runtime.getRuntime()
-        runtime.gc()
-        val memBefore = runtime.totalMemory() - runtime.freeMemory()
-        
         engine.processHits(state, hits)
-        
-        val memAfter = runtime.totalMemory() - runtime.freeMemory()
-        
+
         assertEquals(300, state.activeTrackingCount)
-        // Memory should roughly be same (allow some noise)
-        assertTrue(abs(memAfter - memBefore) < 500_000)
+        assertTrue(idsRefBefore === state.trackedEnemyIds)
+        assertTrue(countsRefBefore === state.enemyHitCounts)
+        assertTrue(durationsRefBefore === state.activeArmorPulverizedDurations)
     }
 
     @Test
